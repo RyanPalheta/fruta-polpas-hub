@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum DiaSemana {
+  SEGUNDA
+  TERCA
+  QUARTA
+  QUINTA
+  SEXTA
+}
+
+enum Segmento {
+  RESTAURANTE
+  HOTELARIA
+  ACADEMIA
+  DISTRIBUIDOR
+  FRANQUIA
+  EVENTOS
+  OUTRO
+}
+
+enum StatusDisparo {
+  AGUARDANDO
+  DISPARADO
+  RESPONDEU
+  PEDIDO_CONFIRMADO
+  PEDIDO_NAO_REALIZADO
+  NAO_RESPONDEU
+  SUPORTE_HUMANO
+}
+
+model Cliente {
+  id                String    @id @default(cuid())
+  empresa           String
+  contatoWhatsapp   String    @map("contato_whatsapp")
+  segmento          Segmento  @default(RESTAURANTE)
+  diaDisparo        DiaSemana @map("dia_disparo")
+  cidade            String?
+  uf                String?
+  ativo             Boolean   @default(true)
+  tags              String[]  @default([])
+  kommoLeadId       Int?      @map("kommo_lead_id")
+  kommoContactId    Int?      @map("kommo_contact_id")
+  ultimoPedidoEm    DateTime? @map("ultimo_pedido_em")
+  ultimoPedidoValor Float?    @map("ultimo_pedido_valor")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  disparos Disparo[]
+
+  @@map("clientes")
+}
+
+model Disparo {
+  id           String        @id @default(cuid())
+  clienteId    String        @map("cliente_id")
+  semanaInicio DateTime      @map("semana_inicio") @db.Date
+  status       StatusDisparo @default(AGUARDANDO)
+  disparadoEm  DateTime?     @map("disparado_em")
+  respondeuEm  DateTime?     @map("respondeu_em")
+  pedidoEm     DateTime?     @map("pedido_em")
+  valorPedido  Float?        @map("valor_pedido")
+  kommoLeadId  Int?          @map("kommo_lead_id")
+  observacoes  String?
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  @@unique([clienteId, semanaInicio])
+  @@index([semanaInicio])
+  @@index([status])
+  @@map("disparos")
+}
+
+model CicloSemanal {
+  id                  String   @id @default(cuid())
+  semanaInicio        DateTime @unique @map("semana_inicio") @db.Date
+  semanaFim           DateTime @map("semana_fim") @db.Date
+  totalDisparados     Int      @default(0) @map("total_disparados")
+  totalResponderam    Int      @default(0) @map("total_responderam")
+  totalPedidos        Int      @default(0) @map("total_pedidos")
+  totalNaoResponderam Int      @default(0) @map("total_nao_responderam")
+  totalValor          Float    @default(0) @map("total_valor")
+  marcoZeroExecutado  Boolean  @default(false) @map("marco_zero_executado")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  @@map("ciclos_semanais")
+}
+
+model Configuracao {
+  id                String @id @default("default")
+  horarioDisparo    String @default("08:00") @map("horario_disparo")
+  horarioFollowup   String @default("14:00") @map("horario_followup")
+  kommoPipelineId   String? @map("kommo_pipeline_id")
+  kommoStatusIds    Json?   @map("kommo_status_ids")
+  kommoToken        String? @map("kommo_token")
+  kommoSubdomain    String? @default("frutapolpas") @map("kommo_subdomain")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("configuracoes")
+}
