@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 
 const NAV_ITEMS = [
@@ -16,8 +17,8 @@ export function Sidebar() {
   return (
     <aside className="h-screen w-64 fixed left-0 top-0 bg-slate-100 flex flex-col py-6 px-4 border-r-0 z-50">
       <div className="flex items-center gap-3 px-2 mb-10">
-        <div className="w-10 h-10 rounded-lg bg-green-600 flex items-center justify-center text-white font-bold text-lg">
-          F
+        <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0">
+          <Image src="/logo.svg" alt="Logo" width={40} height={40} className="w-full h-full object-cover" />
         </div>
         <div>
           <h1 className="text-lg font-bold text-neutral-900 leading-tight">
