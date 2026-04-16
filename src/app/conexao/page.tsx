@@ -57,7 +57,7 @@ export default function ConexaoPage() {
       }
     } catch {
       setPageStatus("error");
-      setError("Não foi possível conectar ao servidor UAZAPI.");
+      setError("Não foi possível conectar ao servidor de mensagens.");
     }
   }, []);
 
@@ -103,7 +103,7 @@ export default function ConexaoPage() {
           Conexão WhatsApp
         </h2>
         <p className="text-on-surface-variant font-medium text-lg">
-          Status da instância UAZAPI — Fruta Polpas
+          Status da instância WhatsApp — Fruta Polpas
         </p>
       </div>
 
