@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: "/", icon: "dashboard", label: "Dashboard" },
   { href: "/disparos", icon: "send", label: "Disparos" },
   { href: "/leads", icon: "group", label: "Leads" },
+  { href: "/conexao", icon: "wifi", label: "Conexao" },
   { href: "/configuracoes", icon: "settings", label: "Configuracoes" },
 ];
 
