@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
-import { getInitials, SEGMENTO_COLORS, DIA_LABELS, formatPhone } from "@/lib/utils";
 import { StatCard } from "@/components/stat-card";
 import Link from "next/link";
+import { LeadsTable } from "./leads-table";
 
 export const dynamic = "force-dynamic";
 
@@ -159,130 +159,8 @@ export default async function Page({
         </div>
       </div>
 
-      {/* Data Table */}
-      <div className="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/10 overflow-hidden mb-6">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-outline-variant/10">
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
-                  Empresa
-                </th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
-                  Contato WhatsApp
-                </th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
-                  Segmento
-                </th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
-                  Dia do Disparo
-                </th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
-                  Ultimo Pedido
-                </th>
-                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
-                  Acoes
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-outline-variant/10">
-              {clientes.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-on-surface-variant">
-                    Nenhum cliente encontrado.
-                  </td>
-                </tr>
-              )}
-              {clientes.map((cliente) => {
-                const segColor = SEGMENTO_COLORS[cliente.segmento] || SEGMENTO_COLORS.OUTRO;
-                return (
-                  <tr
-                    key={cliente.id}
-                    className="hover:bg-surface-bright transition-colors"
-                  >
-                    {/* Empresa */}
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0">
-                          {getInitials(cliente.empresa)}
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-on-surface">
-                            {cliente.empresa}
-                          </p>
-                          {cliente.cidade && (
-                            <p className="text-xs text-on-surface-variant">
-                              {cliente.cidade}
-                              {cliente.uf ? `, ${cliente.uf}` : ""}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* Contato WhatsApp */}
-                    <td className="px-6 py-4">
-                      <span className="text-sm text-on-surface">
-                        {formatPhone(cliente.contatoWhatsapp)}
-                      </span>
-                    </td>
-
-                    {/* Segmento */}
-                    <td className="px-6 py-4">
-                      <span
-                        className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold ${segColor.bg} ${segColor.text} border ${segColor.border}`}
-                      >
-                        {cliente.segmento}
-                      </span>
-                    </td>
-
-                    {/* Dia do Disparo */}
-                    <td className="px-6 py-4">
-                      <span className="text-sm text-on-surface">
-                        {cliente.diaDisparo
-                          ? DIA_LABELS[cliente.diaDisparo] || cliente.diaDisparo
-                          : "—"}
-                      </span>
-                    </td>
-
-                    {/* Ultimo Pedido */}
-                    <td className="px-6 py-4">
-                      {cliente.ultimoPedidoEm ? (
-                        <div>
-                          <p className="text-sm font-semibold text-on-surface">
-                            {new Date(cliente.ultimoPedidoEm).toLocaleDateString("pt-BR")}
-                          </p>
-                          {cliente.ultimoPedidoValor != null && (
-                            <p className="text-xs text-on-surface-variant">
-                              R${" "}
-                              {cliente.ultimoPedidoValor.toLocaleString("pt-BR", {
-                                minimumFractionDigits: 2,
-                              })}
-                            </p>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-sm text-on-surface-variant">—</span>
-                      )}
-                    </td>
-
-                    {/* Acoes */}
-                    <td className="px-6 py-4">
-                      <Link
-                        href={`/leads/${cliente.id}/editar`}
-                        className="p-2 rounded-lg hover:bg-surface-container-low transition-colors text-on-surface-variant hover:text-primary"
-                        title="Editar"
-                      >
-                        <span className="material-symbols-outlined text-lg">edit</span>
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* Data Table with bulk select */}
+      <LeadsTable clientes={clientes} />
 
       {/* Pagination */}
       {totalPages > 1 && (
