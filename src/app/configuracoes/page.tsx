@@ -5,69 +5,56 @@ import { useEffect, useState } from "react";
 interface Config {
   horarioDisparo: string;
   horarioFollowup: string;
-  kommoPipelineId: string;
   kommoToken: string;
   kommoSubdomain: string;
-  kommoStatusIds: string;
+  kommoPipelineId: string;
+  // Stored inside kommoStatusIds JSON
+  statusDisparo: string;
+  statusEmAtendimento: string;
 }
 
-const EMPTY_CONFIG: Config = {
-  horarioDisparo: "",
-  horarioFollowup: "",
-  kommoPipelineId: "",
+const EMPTY: Config = {
+  horarioDisparo: "08:00",
+  horarioFollowup: "14:00",
   kommoToken: "",
-  kommoSubdomain: "",
-  kommoStatusIds: "{}",
-};
-
-const FIELD_LABELS: Record<keyof Omit<Config, "kommoStatusIds">, string> = {
-  horarioDisparo: "Horario Disparo",
-  horarioFollowup: "Horario Followup",
-  kommoPipelineId: "Kommo Pipeline ID",
-  kommoToken: "Kommo Token",
-  kommoSubdomain: "Kommo Subdomain",
+  kommoSubdomain: "frutapolpas",
+  kommoPipelineId: "",
+  statusDisparo: "",
+  statusEmAtendimento: "",
 };
 
 export default function ConfiguracoesPage() {
-  const [config, setConfig] = useState<Config>(EMPTY_CONFIG);
+  const [config, setConfig] = useState<Config>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch("/api/configuracoes");
-        if (!res.ok) throw new Error();
-        const data = await res.json();
+    fetch("/api/configuracoes")
+      .then((r) => r.json())
+      .then((data) => {
+        const ids = (data.kommoStatusIds ?? {}) as Record<string, string>;
         setConfig({
-          horarioDisparo: data.horarioDisparo ?? "",
-          horarioFollowup: data.horarioFollowup ?? "",
-          kommoPipelineId: data.kommoPipelineId ?? "",
+          horarioDisparo: data.horarioDisparo ?? "08:00",
+          horarioFollowup: data.horarioFollowup ?? "14:00",
           kommoToken: data.kommoToken ?? "",
-          kommoSubdomain: data.kommoSubdomain ?? "",
-          kommoStatusIds:
-            typeof data.kommoStatusIds === "string"
-              ? data.kommoStatusIds
-              : JSON.stringify(data.kommoStatusIds ?? {}, null, 2),
+          kommoSubdomain: data.kommoSubdomain ?? "frutapolpas",
+          kommoPipelineId: data.kommoPipelineId ?? "",
+          statusDisparo: ids.disparo ?? "",
+          statusEmAtendimento: ids.emAtendimento ?? "",
         });
-      } catch {
-        setToast({ text: "Erro ao carregar configuracoes.", type: "error" });
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
+      })
+      .catch(() => setToast({ text: "Erro ao carregar configurações.", type: "error" }))
+      .finally(() => setLoading(false));
   }, []);
 
-  // Auto-dismiss toast
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 4000);
     return () => clearTimeout(t);
   }, [toast]);
 
-  function handleChange(field: keyof Config, value: string) {
+  function set(field: keyof Config, value: string) {
     setConfig((prev) => ({ ...prev, [field]: value }));
   }
 
@@ -75,17 +62,6 @@ export default function ConfiguracoesPage() {
     e.preventDefault();
     setSaving(true);
     setToast(null);
-
-    // Validate JSON for kommoStatusIds
-    let parsedStatusIds: unknown;
-    try {
-      parsedStatusIds = JSON.parse(config.kommoStatusIds);
-    } catch {
-      setToast({ text: "kommoStatusIds contem JSON invalido.", type: "error" });
-      setSaving(false);
-      return;
-    }
-
     try {
       const res = await fetch("/api/configuracoes", {
         method: "PUT",
@@ -93,16 +69,19 @@ export default function ConfiguracoesPage() {
         body: JSON.stringify({
           horarioDisparo: config.horarioDisparo,
           horarioFollowup: config.horarioFollowup,
-          kommoPipelineId: config.kommoPipelineId,
           kommoToken: config.kommoToken,
           kommoSubdomain: config.kommoSubdomain,
-          kommoStatusIds: parsedStatusIds,
+          kommoPipelineId: config.kommoPipelineId,
+          kommoStatusIds: {
+            disparo: config.statusDisparo,
+            emAtendimento: config.statusEmAtendimento,
+          },
         }),
       });
       if (!res.ok) throw new Error();
-      setToast({ text: "Configuracoes salvas com sucesso!", type: "success" });
+      setToast({ text: "Configurações salvas!", type: "success" });
     } catch {
-      setToast({ text: "Erro ao salvar configuracoes.", type: "error" });
+      setToast({ text: "Erro ao salvar.", type: "error" });
     } finally {
       setSaving(false);
     }
@@ -111,86 +90,188 @@ export default function ConfiguracoesPage() {
   if (loading) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
-        <p className="text-sm text-on-surface-variant">Carregando configuracoes...</p>
+        <span className="material-symbols-outlined animate-spin text-primary text-3xl">progress_activity</span>
       </div>
     );
   }
 
-  const textFields = Object.keys(FIELD_LABELS) as (keyof typeof FIELD_LABELS)[];
-
   return (
-    <div className="mx-auto max-w-2xl space-y-8 p-6">
+    <>
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-on-surface">Configuracoes</h1>
-        <p className="mt-1 text-sm text-on-surface-variant">
-          Parametros gerais do sistema de disparos
+      <div className="mb-10">
+        <h2 className="text-4xl font-extrabold text-primary tracking-tight leading-none mb-2">
+          Configurações
+        </h2>
+        <p className="text-on-surface-variant font-medium text-lg">
+          Parâmetros do sistema de disparos
         </p>
       </div>
 
-      {/* Toast */}
       {toast && (
-        <div
-          className={`rounded-xl px-4 py-3 text-sm font-medium ${
-            toast.type === "success"
-              ? "bg-green-50 text-green-700 border border-green-200"
-              : "bg-red-50 text-red-600 border border-red-200"
-          }`}
-        >
+        <div className={`mb-6 flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium border max-w-2xl ${
+          toast.type === "success"
+            ? "bg-green-50 border-green-100 text-green-700"
+            : "bg-red-50 border-red-100 text-red-700"
+        }`}>
+          <span className="material-symbols-outlined text-base">
+            {toast.type === "success" ? "check_circle" : "error"}
+          </span>
           {toast.text}
         </div>
       )}
 
-      {/* Form */}
-      <form onSubmit={handleSave} className="space-y-6">
-        <div className="rounded-2xl border border-outline-variant bg-surface-container-lowest p-6 space-y-5">
-          {textFields.map((field) => (
-            <div key={field}>
-              <label
-                htmlFor={field}
-                className="mb-1.5 block text-xs font-semibold uppercase tracking-widest text-on-surface-variant"
-              >
-                {FIELD_LABELS[field]}
+      <form onSubmit={handleSave} className="max-w-2xl space-y-6">
+
+        {/* Horários */}
+        <section className="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/10 p-6 space-y-5">
+          <h3 className="text-sm font-bold text-on-surface uppercase tracking-widest">
+            Horários de Disparo
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">
+                Horário do Disparo
               </label>
               <input
-                id={field}
-                type={field === "kommoToken" ? "password" : "text"}
-                value={config[field]}
-                onChange={(e) => handleChange(field, e.target.value)}
-                className="w-full rounded-xl border border-outline-variant bg-surface-container-low px-4 py-2.5 text-sm text-on-surface placeholder:text-on-surface-variant/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                type="time"
+                value={config.horarioDisparo}
+                onChange={(e) => set("horarioDisparo", e.target.value)}
+                className="w-full px-4 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant/20 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/30"
               />
+              <p className="text-xs text-on-surface-variant mt-1">Disparo principal da manhã</p>
             </div>
-          ))}
+            <div>
+              <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">
+                Horário do Follow-up
+              </label>
+              <input
+                type="time"
+                value={config.horarioFollowup}
+                onChange={(e) => set("horarioFollowup", e.target.value)}
+                className="w-full px-4 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant/20 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+              <p className="text-xs text-on-surface-variant mt-1">Re-envio para não respondidos</p>
+            </div>
+          </div>
+        </section>
 
-          {/* kommoStatusIds JSON textarea */}
+        {/* KOMMO */}
+        <section className="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/10 p-6 space-y-5">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-sm font-bold text-on-surface uppercase tracking-widest">
+              Integração KOMMO
+            </h3>
+          </div>
+
+          {/* Token */}
           <div>
-            <label
-              htmlFor="kommoStatusIds"
-              className="mb-1.5 block text-xs font-semibold uppercase tracking-widest text-on-surface-variant"
-            >
-              Kommo Status IDs (JSON)
+            <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">
+              Token de Acesso
             </label>
-            <textarea
-              id="kommoStatusIds"
-              rows={8}
-              value={config.kommoStatusIds}
-              onChange={(e) => handleChange("kommoStatusIds", e.target.value)}
-              className="w-full rounded-xl border border-outline-variant bg-surface-container-low px-4 py-2.5 font-mono text-sm text-on-surface placeholder:text-on-surface-variant/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            <input
+              type="password"
+              value={config.kommoToken}
+              onChange={(e) => set("kommoToken", e.target.value)}
+              placeholder="eyJ0eXAiOiJKV1Qi..."
+              className="w-full px-4 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant/20 text-sm text-on-surface font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </div>
-        </div>
 
-        {/* Save button */}
+          {/* Subdomain */}
+          <div>
+            <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">
+              Subdomínio
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={config.kommoSubdomain}
+                onChange={(e) => set("kommoSubdomain", e.target.value)}
+                placeholder="frutapolpas"
+                className="flex-1 px-4 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant/20 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+              <span className="text-sm text-on-surface-variant">.kommo.com</span>
+            </div>
+          </div>
+
+          {/* Pipeline + Status IDs */}
+          <div className="p-4 rounded-xl bg-surface-container-low border border-outline-variant/10 space-y-4">
+            <div className="flex items-start gap-2">
+              <span className="material-symbols-outlined text-primary text-lg mt-0.5">account_tree</span>
+              <div>
+                <p className="text-sm font-semibold text-on-surface">Pipeline de Disparos</p>
+                <p className="text-xs text-on-surface-variant">Pipeline: <strong>Funil de vendas</strong> — Stage trigger: <strong>Disparo</strong></p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">
+                  Pipeline ID
+                </label>
+                <input
+                  type="text"
+                  value={config.kommoPipelineId}
+                  onChange={(e) => set("kommoPipelineId", e.target.value)}
+                  placeholder="ex: 8654321"
+                  className="w-full px-3 py-2 rounded-xl bg-surface-container-lowest border border-outline-variant/20 text-sm text-on-surface font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">
+                  Status ID — Disparo
+                </label>
+                <input
+                  type="text"
+                  value={config.statusDisparo}
+                  onChange={(e) => set("statusDisparo", e.target.value)}
+                  placeholder="ex: 68231456"
+                  className="w-full px-3 py-2 rounded-xl bg-surface-container-lowest border border-outline-variant/20 text-sm text-on-surface font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">
+                  Status ID — Em Atendimento
+                </label>
+                <input
+                  type="text"
+                  value={config.statusEmAtendimento}
+                  onChange={(e) => set("statusEmAtendimento", e.target.value)}
+                  placeholder="ex: 68231457"
+                  className="w-full px-3 py-2 rounded-xl bg-surface-container-lowest border border-outline-variant/20 text-sm text-on-surface font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+            </div>
+
+            {/* How to find IDs */}
+            <details className="mt-2">
+              <summary className="text-xs text-primary font-medium cursor-pointer select-none">
+                Como encontrar os IDs?
+              </summary>
+              <div className="mt-2 text-xs text-on-surface-variant space-y-1 pl-2 border-l-2 border-outline-variant/20">
+                <p><strong>Pipeline ID:</strong> No KOMMO, abre o pipeline → a URL mostra <code className="bg-surface-container px-1 rounded">/leads/pipeline/XXXXXX/</code></p>
+                <p><strong>Status ID (stage):</strong> Vai em <strong>Configurações → Pipelines</strong> → clica no stage → o ID aparece na URL ou no código-fonte.</p>
+                <p className="text-amber-600">⚠️ Os IDs só ficam disponíveis quando a assinatura KOMMO estiver ativa.</p>
+              </div>
+            </details>
+          </div>
+        </section>
+
         <div className="flex justify-end">
           <button
             type="submit"
             disabled={saving}
-            className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-on-primary transition hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-primary text-white font-semibold text-sm hover:opacity-90 disabled:opacity-50 transition-opacity shadow-sm"
           >
-            {saving ? "Salvando..." : "Salvar Configuracoes"}
+            {saving ? (
+              <span className="material-symbols-outlined text-lg animate-spin">progress_activity</span>
+            ) : (
+              <span className="material-symbols-outlined text-lg">save</span>
+            )}
+            {saving ? "Salvando..." : "Salvar Configurações"}
           </button>
         </div>
       </form>
-    </div>
+    </>
   );
 }
