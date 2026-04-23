@@ -1,7 +1,6 @@
 import { prisma } from "@/lib/prisma";
-import { StatusDisparo } from "@/generated/prisma/client";
-import { getDiaSemanaHoje, getInicioSemana } from "@/lib/utils";
-import { moveLeadToStatus, createLeadComplex, findKommoLeadByPhone } from "@/lib/kommo";
+import { getInicioSemana } from "@/lib/utils";
+import { executarDisparos } from "@/lib/executar-disparos";
 
 export async function GET(request: Request) {
   try {
@@ -38,125 +37,8 @@ export async function GET(request: Request) {
 
 export async function POST(_request: Request) {
   try {
-    const diaSemana = getDiaSemanaHoje();
-    const semanaInicio = getInicioSemana();
-
-    if (!diaSemana) {
-      return Response.json({ message: "Hoje é fim de semana", created: 0 });
-    }
-
-    // Load config for KOMMO integration
-    const config = await prisma.configuracao.findUnique({ where: { id: "default" } });
-    const statusIds = (config?.kommoStatusIds ?? {}) as Record<string, string>;
-    const pipelineId = config?.kommoPipelineId ? parseInt(config.kommoPipelineId) : null;
-    const disparoStatusId = statusIds.disparo ? parseInt(statusIds.disparo) : null;
-    const kommoReady = !!(pipelineId && disparoStatusId && config?.kommoToken && config?.kommoSubdomain);
-
-    const clientes = await prisma.cliente.findMany({
-      where: { ativo: true, diaDisparo: diaSemana },
-    });
-
-    if (clientes.length === 0) {
-      return Response.json({ message: "Nenhum cliente programado para hoje", created: 0 });
-    }
-
-    const now = new Date();
-    let created = 0;
-    const errors: string[] = [];
-    const kommoResults = { triggered: 0, matched: 0, created: 0, failed: 0 };
-
-    for (const cliente of clientes) {
-      // 1. Upsert disparo record
-      try {
-        await prisma.disparo.upsert({
-          where: { clienteId_semanaInicio: { clienteId: cliente.id, semanaInicio } },
-          create: {
-            clienteId: cliente.id,
-            semanaInicio,
-            status: StatusDisparo.DISPARADO,
-            disparadoEm: now,
-          },
-          update: {
-            status: StatusDisparo.DISPARADO,
-            disparadoEm: now,
-          },
-        });
-        created++;
-      } catch (err) {
-        console.error(`Erro ao criar disparo para cliente ${cliente.id}:`, err);
-        errors.push(`DB error: ${cliente.empresa}`);
-        continue;
-      }
-
-      // 2. Trigger KOMMO salesbot (move lead to "Disparo" status)
-      if (kommoReady) {
-        try {
-          // Step A: resolve the KOMMO lead for this cliente.
-          // Priority: cached DB id → lookup by phone in KOMMO → create new.
-          let leadId: number | null = cliente.kommoLeadId ?? null;
-
-          if (!leadId) {
-            // Try to find an existing KOMMO contact by phone
-            const found = await findKommoLeadByPhone(cliente.contatoWhatsapp);
-
-            if (found) {
-              // Cache the IDs so we don't search again next cycle
-              await prisma.cliente.update({
-                where: { id: cliente.id },
-                data: {
-                  kommoLeadId: found.leadId ?? null,
-                  kommoContactId: found.contactId,
-                },
-              });
-
-              if (found.leadId) {
-                leadId = found.leadId;
-                kommoResults.matched++;
-              }
-              // If contact exists but has no lead, fall through to create lead below
-            }
-          }
-
-          // Step B: move existing lead OR create a new one in the Disparo stage
-          if (leadId) {
-            await moveLeadToStatus(leadId, disparoStatusId!, pipelineId!);
-            kommoResults.triggered++;
-          } else {
-            const result = await createLeadComplex({
-              name: cliente.empresa,
-              phone: cliente.contatoWhatsapp,
-              pipelineId: pipelineId!,
-              statusId: disparoStatusId!,
-              tags: ["Disparo Automático"],
-            });
-
-            const newLeadId = result?._embedded?.leads?.[0]?.id;
-            const newContactId = result?._embedded?.contacts?.[0]?.id;
-            if (newLeadId || newContactId) {
-              await prisma.cliente.update({
-                where: { id: cliente.id },
-                data: {
-                  ...(newLeadId ? { kommoLeadId: newLeadId } : {}),
-                  ...(newContactId ? { kommoContactId: newContactId } : {}),
-                },
-              });
-            }
-            kommoResults.created++;
-          }
-        } catch (err) {
-          console.error(`Erro KOMMO para cliente ${cliente.empresa}:`, err);
-          kommoResults.failed++;
-          // Don't abort — disparo already registered
-        }
-      }
-    }
-
-    return Response.json({
-      message: `Disparos criados para ${diaSemana}`,
-      created,
-      kommo: kommoReady ? kommoResults : { skipped: true, reason: "KOMMO não configurado" },
-      errors: errors.length ? errors : undefined,
-    });
+    const result = await executarDisparos();
+    return Response.json(result);
   } catch (error) {
     console.error("POST /api/disparos error:", error);
     return Response.json({ error: "Erro ao criar disparos" }, { status: 500 });
