@@ -90,6 +90,13 @@ export default async function Page({
             <span className="material-symbols-outlined text-lg">upload_file</span>
             Importar Planilha
           </Link>
+          <Link
+            href="/leads/novo"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-white font-semibold text-sm hover:opacity-90 transition-opacity shadow-sm"
+          >
+            <span className="material-symbols-outlined text-lg">person_add</span>
+            Novo Lead
+          </Link>
         </div>
       </div>
 
