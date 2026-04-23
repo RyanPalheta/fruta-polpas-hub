@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { StatusDisparo } from "@/generated/prisma/client";
 import { getDiaSemanaHoje, getInicioSemana } from "@/lib/utils";
-import { moveLeadToStatus, createLeadComplex } from "@/lib/kommo";
+import { moveLeadToStatus, createLeadComplex, findKommoLeadByPhone } from "@/lib/kommo";
 
 export async function GET(request: Request) {
   try {
@@ -63,7 +63,7 @@ export async function POST(_request: Request) {
     const now = new Date();
     let created = 0;
     const errors: string[] = [];
-    const kommoResults = { triggered: 0, created: 0, failed: 0 };
+    const kommoResults = { triggered: 0, matched: 0, created: 0, failed: 0 };
 
     for (const cliente of clientes) {
       // 1. Upsert disparo record
@@ -91,12 +91,37 @@ export async function POST(_request: Request) {
       // 2. Trigger KOMMO salesbot (move lead to "Disparo" status)
       if (kommoReady) {
         try {
-          if (cliente.kommoLeadId) {
-            // Lead already exists in KOMMO — move to Disparo status
-            await moveLeadToStatus(cliente.kommoLeadId, disparoStatusId!, pipelineId!);
+          // Step A: resolve the KOMMO lead for this cliente.
+          // Priority: cached DB id → lookup by phone in KOMMO → create new.
+          let leadId: number | null = cliente.kommoLeadId ?? null;
+
+          if (!leadId) {
+            // Try to find an existing KOMMO contact by phone
+            const found = await findKommoLeadByPhone(cliente.contatoWhatsapp);
+
+            if (found) {
+              // Cache the IDs so we don't search again next cycle
+              await prisma.cliente.update({
+                where: { id: cliente.id },
+                data: {
+                  kommoLeadId: found.leadId ?? null,
+                  kommoContactId: found.contactId,
+                },
+              });
+
+              if (found.leadId) {
+                leadId = found.leadId;
+                kommoResults.matched++;
+              }
+              // If contact exists but has no lead, fall through to create lead below
+            }
+          }
+
+          // Step B: move existing lead OR create a new one in the Disparo stage
+          if (leadId) {
+            await moveLeadToStatus(leadId, disparoStatusId!, pipelineId!);
             kommoResults.triggered++;
           } else {
-            // Create lead in KOMMO directly in the Disparo status (triggers salesbot)
             const result = await createLeadComplex({
               name: cliente.empresa,
               phone: cliente.contatoWhatsapp,
@@ -106,11 +131,14 @@ export async function POST(_request: Request) {
             });
 
             const newLeadId = result?._embedded?.leads?.[0]?.id;
-            if (newLeadId) {
-              // Save KOMMO lead ID back to client
+            const newContactId = result?._embedded?.contacts?.[0]?.id;
+            if (newLeadId || newContactId) {
               await prisma.cliente.update({
                 where: { id: cliente.id },
-                data: { kommoLeadId: newLeadId },
+                data: {
+                  ...(newLeadId ? { kommoLeadId: newLeadId } : {}),
+                  ...(newContactId ? { kommoContactId: newContactId } : {}),
+                },
               });
             }
             kommoResults.created++;
