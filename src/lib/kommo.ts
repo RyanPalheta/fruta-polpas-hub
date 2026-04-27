@@ -11,10 +11,15 @@ async function getConfig() {
 async function kommoFetch(path: string, options: RequestInit = {}) {
   const config = await getConfig();
   const baseUrl = `https://${config.kommoSubdomain}.kommo.com`;
+
+  // Strip any non-ASCII characters that may have been introduced by copy-paste
+  // (e.g. bullet points, smart quotes, zero-width spaces) before setting headers.
+  const cleanToken = config.kommoToken.replace(/[^\x20-\x7E]/g, "").trim();
+
   const res = await fetch(`${baseUrl}${path}`, {
     ...options,
     headers: {
-      Authorization: `Bearer ${config.kommoToken}`,
+      Authorization: `Bearer ${cleanToken}`,
       "Content-Type": "application/json",
       ...options.headers,
     },
