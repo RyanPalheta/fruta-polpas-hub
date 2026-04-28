@@ -1,31 +1,81 @@
 import { prisma } from "./prisma";
 import { StatusDisparo } from "@/generated/prisma/client";
 import { getDiaSemanaHoje, getInicioSemana } from "./utils";
-import { moveLeadToStatus, createLeadComplex, findKommoLeadByPhone } from "./kommo";
+
+const WEBHOOK_URL = "https://webhook.venancioautomacoes.com.br/webhook/disparo_fruta";
+
+export interface WebhookDisparoPayload {
+  lead_id: number | null;
+  empresa: string;
+  telefone: string;
+  cliente_id: string;
+}
+
+export interface WebhookDisparoResponse {
+  success?: boolean;
+  [key: string]: unknown;
+}
 
 export interface DisparoResult {
   message: string;
   created: number;
-  kommo:
-    | { triggered: number; matched: number; created: number; failed: number }
-    | { skipped: true; reason: string };
+  webhook: {
+    enviados: number;
+    falhas: number;
+    resultados: Array<{
+      empresa: string;
+      lead_id: number | null;
+      ok: boolean;
+      resposta?: unknown;
+      erro?: string;
+    }>;
+  };
   errors?: string[];
 }
 
+/**
+ * Dispara um único lead via n8n webhook.
+ * Aguarda resposta síncrona do n8n (timeout: 25s).
+ */
+export async function dispararLeadViaWebhook(
+  payload: WebhookDisparoPayload
+): Promise<WebhookDisparoResponse> {
+  const res = await fetch(WEBHOOK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(25_000),
+  });
+
+  const text = await res.text();
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = text;
+  }
+
+  if (!res.ok) {
+    throw new Error(`Webhook respondeu ${res.status}: ${text.slice(0, 200)}`);
+  }
+
+  return body as WebhookDisparoResponse;
+}
+
+/**
+ * Executa os disparos do dia: registra no banco e chama o n8n para cada cliente.
+ */
 export async function executarDisparos(): Promise<DisparoResult> {
   const diaSemana = getDiaSemanaHoje();
   const semanaInicio = getInicioSemana();
 
   if (!diaSemana) {
-    return { message: "Hoje é fim de semana", created: 0, kommo: { skipped: true, reason: "Fim de semana" } };
+    return {
+      message: "Hoje é fim de semana",
+      created: 0,
+      webhook: { enviados: 0, falhas: 0, resultados: [] },
+    };
   }
-
-  // Load KOMMO config
-  const config = await prisma.configuracao.findUnique({ where: { id: "default" } });
-  const statusIds = (config?.kommoStatusIds ?? {}) as Record<string, string>;
-  const pipelineId = config?.kommoPipelineId ? parseInt(config.kommoPipelineId) : null;
-  const disparoStatusId = statusIds.disparo ? parseInt(statusIds.disparo) : null;
-  const kommoReady = !!(pipelineId && disparoStatusId && config?.kommoToken && config?.kommoSubdomain);
 
   const clientes = await prisma.cliente.findMany({
     where: { ativo: true, diaDisparo: diaSemana },
@@ -35,17 +85,17 @@ export async function executarDisparos(): Promise<DisparoResult> {
     return {
       message: "Nenhum cliente programado para hoje",
       created: 0,
-      kommo: { skipped: true, reason: "Sem clientes" },
+      webhook: { enviados: 0, falhas: 0, resultados: [] },
     };
   }
 
   const now = new Date();
   let created = 0;
   const errors: string[] = [];
-  const kommoResults = { triggered: 0, matched: 0, created: 0, failed: 0 };
+  const resultados: DisparoResult["webhook"]["resultados"] = [];
 
   for (const cliente of clientes) {
-    // 1. Upsert disparo record
+    // 1. Upsert disparo no banco
     try {
       await prisma.disparo.upsert({
         where: { clienteId_semanaInicio: { clienteId: cliente.id, semanaInicio } },
@@ -62,72 +112,49 @@ export async function executarDisparos(): Promise<DisparoResult> {
       });
       created++;
     } catch (err) {
-      console.error(`Erro ao criar disparo para cliente ${cliente.id}:`, err);
+      console.error(`Erro ao registrar disparo para ${cliente.empresa}:`, err);
       errors.push(`DB error: ${cliente.empresa}`);
       continue;
     }
 
-    // 2. Trigger KOMMO salesbot
-    if (kommoReady) {
-      try {
-        // Priority: cached lead id → lookup by phone → create new
-        let leadId: number | null = cliente.kommoLeadId ?? null;
+    // 2. Chamar n8n webhook
+    const payload: WebhookDisparoPayload = {
+      lead_id: cliente.kommoLeadId ?? null,
+      empresa: cliente.empresa,
+      telefone: cliente.contatoWhatsapp,
+      cliente_id: cliente.id,
+    };
 
-        if (!leadId) {
-          const found = await findKommoLeadByPhone(cliente.contatoWhatsapp);
+    try {
+      console.log(`[disparo] Enviando webhook para ${cliente.empresa} (lead_id=${payload.lead_id})`);
+      const resposta = await dispararLeadViaWebhook(payload);
+      console.log(`[disparo] Resposta para ${cliente.empresa}:`, resposta);
 
-          if (found) {
-            await prisma.cliente.update({
-              where: { id: cliente.id },
-              data: {
-                kommoLeadId: found.leadId ?? null,
-                kommoContactId: found.contactId,
-              },
-            });
-
-            if (found.leadId) {
-              leadId = found.leadId;
-              kommoResults.matched++;
-            }
-          }
-        }
-
-        if (leadId) {
-          await moveLeadToStatus(leadId, disparoStatusId!, pipelineId!);
-          kommoResults.triggered++;
-        } else {
-          const result = await createLeadComplex({
-            name: cliente.empresa,
-            phone: cliente.contatoWhatsapp,
-            pipelineId: pipelineId!,
-            statusId: disparoStatusId!,
-            tags: ["Disparo Automático"],
-          });
-
-          const newLeadId = result?._embedded?.leads?.[0]?.id;
-          const newContactId = result?._embedded?.contacts?.[0]?.id;
-          if (newLeadId || newContactId) {
-            await prisma.cliente.update({
-              where: { id: cliente.id },
-              data: {
-                ...(newLeadId ? { kommoLeadId: newLeadId } : {}),
-                ...(newContactId ? { kommoContactId: newContactId } : {}),
-              },
-            });
-          }
-          kommoResults.created++;
-        }
-      } catch (err) {
-        console.error(`Erro KOMMO para cliente ${cliente.empresa}:`, err);
-        kommoResults.failed++;
-      }
+      resultados.push({
+        empresa: cliente.empresa,
+        lead_id: payload.lead_id,
+        ok: true,
+        resposta,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[disparo] Erro webhook para ${cliente.empresa}:`, msg);
+      resultados.push({
+        empresa: cliente.empresa,
+        lead_id: payload.lead_id,
+        ok: false,
+        erro: msg,
+      });
     }
   }
 
+  const enviados = resultados.filter((r) => r.ok).length;
+  const falhas = resultados.filter((r) => !r.ok).length;
+
   return {
-    message: `Disparos criados para ${diaSemana}`,
+    message: `Disparos executados para ${diaSemana}`,
     created,
-    kommo: kommoReady ? kommoResults : { skipped: true, reason: "KOMMO não configurado" },
+    webhook: { enviados, falhas, resultados },
     errors: errors.length ? errors : undefined,
   };
 }

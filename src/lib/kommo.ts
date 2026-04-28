@@ -14,7 +14,7 @@ async function kommoFetch(path: string, options: RequestInit = {}) {
 
   // Strip any non-ASCII characters that may have been introduced by copy-paste
   // (e.g. bullet points, smart quotes, zero-width spaces) before setting headers.
-  const cleanToken = config.kommoToken.replace(/[^\x20-\x7E]/g, "").trim();
+  const cleanToken = (config.kommoToken ?? "").replace(/[^\x20-\x7E]/g, "").trim();
 
   const res = await fetch(`${baseUrl}${path}`, {
     ...options,
