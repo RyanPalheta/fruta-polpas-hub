@@ -34,16 +34,22 @@ export interface DisparoResult {
 }
 
 /**
- * Dispara um único lead via n8n webhook.
+ * Dispara um único lead via n8n webhook (GET com query params).
  * Aguarda resposta síncrona do n8n (timeout: 25s).
  */
 export async function dispararLeadViaWebhook(
   payload: WebhookDisparoPayload
 ): Promise<WebhookDisparoResponse> {
-  const res = await fetch(WEBHOOK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+  const params = new URLSearchParams();
+  if (payload.lead_id !== null) params.set("lead_id", String(payload.lead_id));
+  params.set("empresa", payload.empresa);
+  params.set("telefone", payload.telefone);
+  params.set("cliente_id", payload.cliente_id);
+
+  const url = `${WEBHOOK_URL}?${params.toString()}`;
+
+  const res = await fetch(url, {
+    method: "GET",
     signal: AbortSignal.timeout(25_000),
   });
 
@@ -130,9 +136,20 @@ export async function executarDisparos(): Promise<DisparoResult> {
       const resposta = await dispararLeadViaWebhook(payload);
       console.log(`[disparo] Resposta para ${cliente.empresa}:`, resposta);
 
+      // Se o n8n retornou um lead_id (novo contato criado na KOMMO),
+      // salva de volta no banco para cache nos próximos ciclos.
+      const leadIdRetornado =
+        typeof resposta.lead_id === "number" ? resposta.lead_id : null;
+      if (leadIdRetornado && !cliente.kommoLeadId) {
+        await prisma.cliente.update({
+          where: { id: cliente.id },
+          data: { kommoLeadId: leadIdRetornado },
+        });
+      }
+
       resultados.push({
         empresa: cliente.empresa,
-        lead_id: payload.lead_id,
+        lead_id: leadIdRetornado ?? payload.lead_id,
         ok: true,
         resposta,
       });
