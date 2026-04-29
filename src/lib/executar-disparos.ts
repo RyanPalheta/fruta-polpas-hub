@@ -40,16 +40,10 @@ export interface DisparoResult {
 export async function dispararLeadViaWebhook(
   payload: WebhookDisparoPayload
 ): Promise<WebhookDisparoResponse> {
-  const params = new URLSearchParams();
-  if (payload.lead_id !== null) params.set("lead_id", String(payload.lead_id));
-  params.set("empresa", payload.empresa);
-  params.set("telefone", payload.telefone);
-  params.set("cliente_id", payload.cliente_id);
-
-  const url = `${WEBHOOK_URL}?${params.toString()}`;
-
-  const res = await fetch(url, {
-    method: "GET",
+  const res = await fetch(WEBHOOK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(25_000),
   });
 
