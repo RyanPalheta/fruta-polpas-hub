@@ -178,7 +178,10 @@ export async function POST(_request: Request) {
     );
 
     // 4. Calcular métricas finais
-    const finais = await prisma.disparo.findMany({ where: { semanaInicio } });
+    const finais = await prisma.disparo.findMany({
+      where: { semanaInicio },
+      include: { cliente: true },
+    });
 
     const totalDisparados     = finais.length;
     const totalResponderam    = finais.filter((d) =>
@@ -218,6 +221,58 @@ export async function POST(_request: Request) {
         marcoZeroExecutado: true,
       },
     });
+
+    // 6. Enviar relatório para o webhook n8n
+    const relatorio = {
+      semanaInicio: semanaInicio.toISOString().split("T")[0],
+      semanaFim: semanaFim.toISOString().split("T")[0],
+      totalDisparados,
+      totalResponderam,
+      totalPedidos,
+      totalNaoResponderam,
+      totalFollowUp,
+      totalRecuperados,
+      totalValor: parseFloat(totalValor.toFixed(2)),
+      taxaResposta: totalDisparados > 0
+        ? parseFloat(((totalResponderam / totalDisparados) * 100).toFixed(1))
+        : 0,
+      taxaConversao: totalResponderam > 0
+        ? parseFloat(((totalPedidos / totalResponderam) * 100).toFixed(1))
+        : 0,
+      pedidosConfirmados: finais
+        .filter((d) => d.status === StatusDisparo.PEDIDO_CONFIRMADO)
+        .map((d) => ({
+          empresa: d.cliente.empresa,
+          telefone: d.cliente.contatoWhatsapp,
+          valor: d.valorPedido ?? 0,
+          descricao: d.descricaoPedido ?? null,
+          recuperado: d.followUp,
+        })),
+      naoResponderam: finais
+        .filter((d) => d.status === StatusDisparo.NAO_RESPONDEU)
+        .map((d) => ({
+          empresa: d.cliente.empresa,
+          telefone: d.cliente.contatoWhatsapp,
+          segmento: d.cliente.segmento,
+        })),
+      pedidosNaoRealizados: finais
+        .filter((d) => d.status === StatusDisparo.PEDIDO_NAO_REALIZADO)
+        .map((d) => ({
+          empresa: d.cliente.empresa,
+          telefone: d.cliente.contatoWhatsapp,
+        })),
+    };
+
+    try {
+      await fetch("https://webhook.venancioautomacoes.com.br/webhook/marco_zero_fruta", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(relatorio),
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (webhookErr) {
+      console.error("Erro ao enviar relatório para webhook:", webhookErr);
+    }
 
     return Response.json({
       message: "Marco Zero executado com sucesso",
