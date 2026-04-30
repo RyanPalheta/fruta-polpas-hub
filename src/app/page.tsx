@@ -40,6 +40,10 @@ async function getDashboardData() {
   const totalValor = disparosSemana.reduce((sum, d) => sum + (d.valorPedido || 0), 0);
   const taxaResposta = totalDisparados > 0 ? ((responderam / totalDisparados) * 100).toFixed(1) : "0";
   const taxaConversao = responderam > 0 ? ((pedidos / responderam) * 100).toFixed(1) : "0";
+  const followUps = disparosSemana.filter((d) => d.followUp).length;
+  const recuperados = disparosSemana.filter(
+    (d) => d.status === "PEDIDO_CONFIRMADO" && d.followUp
+  ).length;
 
   return {
     totalClientes,
@@ -51,6 +55,8 @@ async function getDashboardData() {
     totalValor,
     taxaResposta,
     taxaConversao,
+    followUps,
+    recuperados,
     statusCounts,
     ciclosRecentes,
     disparosSemana,
@@ -89,7 +95,7 @@ export default async function DashboardPage() {
         />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
         <div className="bg-surface-container-lowest p-6 rounded-2xl shadow-sm border border-outline-variant/10">
           <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1">Taxa de Resposta</p>
           <p className="text-3xl font-black text-primary">{data.taxaResposta}%</p>
@@ -108,6 +114,16 @@ export default async function DashboardPage() {
           <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1">Nao Responderam</p>
           <p className="text-3xl font-black text-error">{data.naoResponderam}</p>
           <p className="text-xs text-on-surface-variant mt-1">potencial churn</p>
+        </div>
+        <div className="bg-surface-container-lowest p-6 rounded-2xl shadow-sm border border-outline-variant/10">
+          <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1">Follow Up</p>
+          <p className="text-3xl font-black text-amber-600">{data.followUps}</p>
+          <p className="text-xs text-on-surface-variant mt-1">receberam 2º disparo</p>
+        </div>
+        <div className="bg-surface-container-lowest p-6 rounded-2xl shadow-sm border border-outline-variant/10">
+          <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1">Recuperados</p>
+          <p className="text-3xl font-black text-green-600">{data.recuperados}</p>
+          <p className="text-xs text-on-surface-variant mt-1">fecharam apos follow up</p>
         </div>
       </div>
 
@@ -189,6 +205,8 @@ export default async function DashboardPage() {
                   <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Responderam</th>
                   <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Pedidos</th>
                   <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Valor</th>
+                  <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Follow Up</th>
+                  <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Recuperados</th>
                   <th className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Marco Zero</th>
                 </tr>
               </thead>
@@ -200,6 +218,8 @@ export default async function DashboardPage() {
                     <td className="px-4 py-3 text-sm">{c.totalResponderam}</td>
                     <td className="px-4 py-3 text-sm font-semibold text-green-700">{c.totalPedidos}</td>
                     <td className="px-4 py-3 text-sm font-semibold">R$ {c.totalValor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-3 text-sm text-amber-600 font-semibold">{c.totalFollowUp}</td>
+                    <td className="px-4 py-3 text-sm text-green-700 font-semibold">{c.totalRecuperados}</td>
                     <td className="px-4 py-3">
                       {c.marcoZeroExecutado ? (
                         <span className="text-green-600 material-symbols-outlined text-lg">check_circle</span>
