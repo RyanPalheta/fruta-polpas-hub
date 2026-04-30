@@ -185,7 +185,7 @@ export async function POST(_request: Request) {
 
     const totalDisparados     = finais.length;
     const totalResponderam    = finais.filter((d) =>
-      [StatusDisparo.PEDIDO_CONFIRMADO, StatusDisparo.PEDIDO_NAO_REALIZADO].includes(d.status)
+      d.status === StatusDisparo.PEDIDO_CONFIRMADO || d.status === StatusDisparo.PEDIDO_NAO_REALIZADO
     ).length;
     const totalPedidos        = finais.filter((d) => d.status === StatusDisparo.PEDIDO_CONFIRMADO).length;
     const totalNaoResponderam = finais.filter((d) => d.status === StatusDisparo.NAO_RESPONDEU).length;
