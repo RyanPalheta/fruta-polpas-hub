@@ -58,18 +58,20 @@ model Cliente {
 }
 
 model Disparo {
-  id           String        @id @default(cuid())
-  clienteId    String        @map("cliente_id")
-  semanaInicio DateTime      @map("semana_inicio") @db.Date
-  status       StatusDisparo @default(AGUARDANDO)
-  disparadoEm  DateTime?     @map("disparado_em")
-  respondeuEm  DateTime?     @map("respondeu_em")
-  pedidoEm     DateTime?     @map("pedido_em")
-  valorPedido  Float?        @map("valor_pedido")
-  kommoLeadId  Int?          @map("kommo_lead_id")
-  observacoes  String?
-  createdAt    DateTime      @default(now()) @map("created_at")
-  updatedAt    DateTime      @updatedAt @map("updated_at")
+  id              String        @id @default(cuid())
+  clienteId       String        @map("cliente_id")
+  semanaInicio    DateTime      @map("semana_inicio") @db.Date
+  status          StatusDisparo @default(AGUARDANDO)
+  disparadoEm     DateTime?     @map("disparado_em")
+  respondeuEm     DateTime?     @map("respondeu_em")
+  pedidoEm        DateTime?     @map("pedido_em")
+  valorPedido     Float?        @map("valor_pedido")
+  kommoLeadId     Int?          @map("kommo_lead_id")
+  followUp        Boolean       @default(false) @map("follow_up")
+  descricaoPedido String?       @map("descricao_pedido")
+  observacoes     String?
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
 
   cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
 
@@ -88,6 +90,8 @@ model CicloSemanal {
   totalPedidos        Int      @default(0) @map("total_pedidos")
   totalNaoResponderam Int      @default(0) @map("total_nao_responderam")
   totalValor          Float    @default(0) @map("total_valor")
+  totalFollowUp       Int      @default(0) @map("total_follow_up")
+  totalRecuperados    Int      @default(0) @map("total_recuperados")
   marcoZeroExecutado  Boolean  @default(false) @map("marco_zero_executado")
   createdAt           DateTime @default(now()) @map("created_at")
 

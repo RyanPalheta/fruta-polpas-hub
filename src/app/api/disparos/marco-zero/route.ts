@@ -2,15 +2,119 @@ import { prisma } from "@/lib/prisma";
 import { StatusDisparo } from "@/generated/prisma/client";
 import { getInicioSemana } from "@/lib/utils";
 
+// KOMMO pipeline / status IDs
+const PIPELINE_ID = 13451647;
+const KOMMO_STATUS = {
+  DISPARO:      104234595,
+  RETIRADA:     103767127,
+  CONFIRMADO:   103767131,
+  NAO_REALIZADO: 103767139,
+} as const;
+
+// KOMMO custom field IDs
+const KOMMO_FIELD = {
+  PEDIDO_DESC: 3140594, // Pedido Confirmado (IA) — texto do pedido
+  RESPONDEU:   3172950, // Respondeu? — boolean
+  FOLLOW_UP:   3172954, // Follow Up — boolean
+} as const;
+
+// ----------------------------------------------------------------
+// Fetch all leads from the current pipeline (max 250)
+// ----------------------------------------------------------------
+async function fetchKommoLeads() {
+  const config = await prisma.configuracao.findUnique({ where: { id: "default" } });
+  if (!config?.kommoToken || !config?.kommoSubdomain) {
+    throw new Error("KOMMO não configurado. Acesse Configurações.");
+  }
+
+  const cleanToken = (config.kommoToken ?? "").replace(/[^\x20-\x7E]/g, "").trim();
+  const url = `https://${config.kommoSubdomain}.kommo.com/api/v4/leads`
+    + `?filter[pipeline_id]=${PIPELINE_ID}&with=custom_fields_values&limit=250`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${cleanToken}` },
+    signal: AbortSignal.timeout(20_000),
+  });
+
+  if (res.status === 204) return [];
+  if (!res.ok) throw new Error(`KOMMO API ${res.status}: ${await res.text()}`);
+
+  const data = await res.json();
+  return (data?._embedded?.leads ?? []) as KommoLead[];
+}
+
+interface KommoLead {
+  id: number;
+  status_id: number;
+  price: number | null;
+  custom_fields_values: Array<{
+    field_id: number;
+    values: Array<{ value: unknown }>;
+  }> | null;
+}
+
+function fieldValue(lead: KommoLead, fieldId: number): unknown {
+  return lead.custom_fields_values
+    ?.find((f) => f.field_id === fieldId)
+    ?.values?.[0]?.value ?? null;
+}
+
+// ----------------------------------------------------------------
+// Map KOMMO state → our StatusDisparo + extra fields
+// ----------------------------------------------------------------
+function classify(lead: KommoLead): {
+  status: StatusDisparo;
+  followUp: boolean;
+  descricaoPedido: string | null;
+  valorPedido: number | null;
+} {
+  const respondeu  = !!fieldValue(lead, KOMMO_FIELD.RESPONDEU);
+  const followUp   = !!fieldValue(lead, KOMMO_FIELD.FOLLOW_UP);
+  const pedidoDesc = fieldValue(lead, KOMMO_FIELD.PEDIDO_DESC) as string | null;
+  const valor      = lead.price ?? null;
+
+  let status: StatusDisparo;
+
+  switch (lead.status_id) {
+    case KOMMO_STATUS.CONFIRMADO:
+      status = StatusDisparo.PEDIDO_CONFIRMADO;
+      break;
+    case KOMMO_STATUS.NAO_REALIZADO:
+      status = respondeu
+        ? StatusDisparo.PEDIDO_NAO_REALIZADO
+        : StatusDisparo.NAO_RESPONDEU;
+      break;
+    case KOMMO_STATUS.RETIRADA:
+      // Ainda em atendimento no momento do Marco Zero → pedido não realizado
+      status = StatusDisparo.PEDIDO_NAO_REALIZADO;
+      break;
+    case KOMMO_STATUS.DISPARO:
+    default:
+      status = StatusDisparo.NAO_RESPONDEU;
+      break;
+  }
+
+  return {
+    status,
+    followUp,
+    descricaoPedido: pedidoDesc,
+    valorPedido: status === StatusDisparo.PEDIDO_CONFIRMADO ? valor : null,
+  };
+}
+
+// ----------------------------------------------------------------
+// POST /api/disparos/marco-zero
+// ----------------------------------------------------------------
 export async function POST(_request: Request) {
   try {
     const semanaInicio = getInicioSemana();
     const semanaFim = new Date(semanaInicio);
     semanaFim.setDate(semanaFim.getDate() + 6);
 
-    // Find all disparos for the current week
+    // 1. Disparos da semana
     const disparos = await prisma.disparo.findMany({
       where: { semanaInicio },
+      include: { cliente: true },
     });
 
     if (disparos.length === 0) {
@@ -20,61 +124,75 @@ export async function POST(_request: Request) {
       );
     }
 
-    // DISPARADO with no response -> NAO_RESPONDEU
-    const disparadosSemResposta = disparos.filter(
-      (d) => d.status === StatusDisparo.DISPARADO
+    // 2. Leads da KOMMO
+    const kommoLeads = await fetchKommoLeads();
+    const leadMap = new Map(kommoLeads.map((l) => [l.id, l]));
+
+    // 3. Sync cada disparo com dados da KOMMO
+    let sincronizados = 0;
+    const errors: string[] = [];
+
+    await Promise.all(
+      disparos.map(async (disparo) => {
+        const leadId = disparo.kommoLeadId ?? disparo.cliente.kommoLeadId;
+
+        if (!leadId) {
+          // Sem lead na KOMMO → não respondeu
+          await prisma.disparo.update({
+            where: { id: disparo.id },
+            data: { status: StatusDisparo.NAO_RESPONDEU },
+          });
+          sincronizados++;
+          return;
+        }
+
+        const lead = leadMap.get(leadId);
+        if (!lead) {
+          errors.push(`Lead ${leadId} (${disparo.cliente.empresa}) não encontrado na KOMMO`);
+          await prisma.disparo.update({
+            where: { id: disparo.id },
+            data: { status: StatusDisparo.NAO_RESPONDEU },
+          });
+          return;
+        }
+
+        const { status, followUp, descricaoPedido, valorPedido } = classify(lead);
+
+        await prisma.disparo.update({
+          where: { id: disparo.id },
+          data: {
+            status,
+            followUp,
+            descricaoPedido,
+            ...(valorPedido !== null && { valorPedido }),
+            ...(status !== StatusDisparo.NAO_RESPONDEU && !disparo.respondeuEm
+              ? { respondeuEm: new Date() }
+              : {}),
+            ...(status === StatusDisparo.PEDIDO_CONFIRMADO && !disparo.pedidoEm
+              ? { pedidoEm: new Date() }
+              : {}),
+          },
+        });
+        sincronizados++;
+      })
     );
-    if (disparadosSemResposta.length > 0) {
-      await prisma.disparo.updateMany({
-        where: {
-          semanaInicio,
-          status: StatusDisparo.DISPARADO,
-        },
-        data: {
-          status: StatusDisparo.NAO_RESPONDEU,
-        },
-      });
-    }
 
-    // RESPONDEU -> PEDIDO_NAO_REALIZADO
-    const responderam = disparos.filter(
-      (d) => d.status === StatusDisparo.RESPONDEU
-    );
-    if (responderam.length > 0) {
-      await prisma.disparo.updateMany({
-        where: {
-          semanaInicio,
-          status: StatusDisparo.RESPONDEU,
-        },
-        data: {
-          status: StatusDisparo.PEDIDO_NAO_REALIZADO,
-        },
-      });
-    }
+    // 4. Calcular métricas finais
+    const finais = await prisma.disparo.findMany({ where: { semanaInicio } });
 
-    // Reload disparos after updates to compute stats
-    const disparosAtualizados = await prisma.disparo.findMany({
-      where: { semanaInicio },
-    });
-
-    const totalDisparados = disparosAtualizados.length;
-    const totalResponderam = disparosAtualizados.filter(
-      (d) =>
-        d.status === StatusDisparo.PEDIDO_CONFIRMADO ||
-        d.status === StatusDisparo.PEDIDO_NAO_REALIZADO
+    const totalDisparados     = finais.length;
+    const totalResponderam    = finais.filter((d) =>
+      [StatusDisparo.PEDIDO_CONFIRMADO, StatusDisparo.PEDIDO_NAO_REALIZADO].includes(d.status)
     ).length;
-    const totalPedidos = disparosAtualizados.filter(
-      (d) => d.status === StatusDisparo.PEDIDO_CONFIRMADO
+    const totalPedidos        = finais.filter((d) => d.status === StatusDisparo.PEDIDO_CONFIRMADO).length;
+    const totalNaoResponderam = finais.filter((d) => d.status === StatusDisparo.NAO_RESPONDEU).length;
+    const totalValor          = finais.reduce((s, d) => s + (d.valorPedido ?? 0), 0);
+    const totalFollowUp       = finais.filter((d) => d.followUp).length;
+    const totalRecuperados    = finais.filter(
+      (d) => d.status === StatusDisparo.PEDIDO_CONFIRMADO && d.followUp
     ).length;
-    const totalNaoResponderam = disparosAtualizados.filter(
-      (d) => d.status === StatusDisparo.NAO_RESPONDEU
-    ).length;
-    const totalValor = disparosAtualizados.reduce(
-      (sum, d) => sum + (d.valorPedido || 0),
-      0
-    );
 
-    // Create or update CicloSemanal
+    // 5. Salvar CicloSemanal
     const ciclo = await prisma.cicloSemanal.upsert({
       where: { semanaInicio },
       create: {
@@ -85,6 +203,8 @@ export async function POST(_request: Request) {
         totalPedidos,
         totalNaoResponderam,
         totalValor,
+        totalFollowUp,
+        totalRecuperados,
         marcoZeroExecutado: true,
       },
       update: {
@@ -93,6 +213,8 @@ export async function POST(_request: Request) {
         totalPedidos,
         totalNaoResponderam,
         totalValor,
+        totalFollowUp,
+        totalRecuperados,
         marcoZeroExecutado: true,
       },
     });
@@ -100,13 +222,21 @@ export async function POST(_request: Request) {
     return Response.json({
       message: "Marco Zero executado com sucesso",
       ciclo,
-      resumo: {
-        naoRespondeuAtualizado: disparadosSemResposta.length,
-        pedidoNaoRealizadoAtualizado: responderam.length,
+      detalhes: {
+        sincronizados,
+        totalDisparados,
+        totalResponderam,
+        totalPedidos,
+        totalNaoResponderam,
+        totalFollowUp,
+        totalRecuperados,
+        totalValor: totalValor.toFixed(2),
+        errors: errors.length ? errors : undefined,
       },
     });
   } catch (error) {
     console.error("POST /api/disparos/marco-zero error:", error);
-    return Response.json({ error: "Erro ao executar Marco Zero" }, { status: 500 });
+    const msg = error instanceof Error ? error.message : "Erro desconhecido";
+    return Response.json({ error: msg }, { status: 500 });
   }
 }
