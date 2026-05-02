@@ -129,7 +129,7 @@ export async function POST(_request: Request) {
     let calledFromN8n = false;
     try {
       const body = await _request.json();
-      if (Array.isArray(body?.leads) && body.leads.length > 0) {
+      if (Array.isArray(body?.leads)) {
         kommoLeads = body.leads as KommoLead[];
         calledFromN8n = true;
       } else {
