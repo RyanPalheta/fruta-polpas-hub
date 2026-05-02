@@ -124,8 +124,20 @@ export async function POST(_request: Request) {
       );
     }
 
-    // 2. Leads da KOMMO
-    const kommoLeads = await fetchKommoLeads();
+    // 2. Leads da KOMMO — aceita array pré-buscado pelo n8n via body
+    let kommoLeads: KommoLead[];
+    let calledFromN8n = false;
+    try {
+      const body = await _request.json();
+      if (Array.isArray(body?.leads) && body.leads.length > 0) {
+        kommoLeads = body.leads as KommoLead[];
+        calledFromN8n = true;
+      } else {
+        kommoLeads = await fetchKommoLeads();
+      }
+    } catch {
+      kommoLeads = await fetchKommoLeads();
+    }
     const leadMap = new Map(kommoLeads.map((l) => [l.id, l]));
 
     // 3. Sync cada disparo com dados da KOMMO
@@ -263,19 +275,24 @@ export async function POST(_request: Request) {
         })),
     };
 
-    try {
-      await fetch("https://webhook.venancioautomacoes.com.br/webhook/marco_zero_fruta", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(relatorio),
-        signal: AbortSignal.timeout(15_000),
-      });
-    } catch (webhookErr) {
-      console.error("Erro ao enviar relatório para webhook:", webhookErr);
+    // 6a. Se chamado diretamente (não pelo n8n), dispara o webhook manualmente
+    if (!calledFromN8n) {
+      try {
+        await fetch("https://webhook.venancioautomacoes.com.br/webhook/marco_zero_fruta", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(relatorio),
+          signal: AbortSignal.timeout(15_000),
+        });
+      } catch (webhookErr) {
+        console.error("Erro ao enviar relatório para webhook:", webhookErr);
+      }
     }
 
+    // 6b. Retorna relatorio completo para o n8n (ou resposta padrão)
     return Response.json({
       message: "Marco Zero executado com sucesso",
+      relatorio,
       ciclo,
       detalhes: {
         sincronizados,
