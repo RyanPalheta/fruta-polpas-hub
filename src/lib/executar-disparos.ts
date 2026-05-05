@@ -121,7 +121,7 @@ export async function executarDisparos(): Promise<DisparoResult> {
     const payload: WebhookDisparoPayload = {
       lead_id: cliente.kommoLeadId ?? null,
       empresa: cliente.empresa,
-      telefone: cliente.contatoWhatsapp,
+      telefone: cliente.contatoWhatsapp.replace(/[^\d+]/g, ""),
       cliente_id: cliente.id,
     };
 
