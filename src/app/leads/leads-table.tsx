@@ -264,13 +264,22 @@ export function LeadsTable({ clientes }: Props) {
 
                     {/* Ações */}
                     <td className="px-4 py-4">
-                      <Link
-                        href={`/leads/${cliente.id}/editar`}
-                        className="p-2 rounded-lg hover:bg-surface-container-low transition-colors text-on-surface-variant hover:text-primary"
-                        title="Editar"
-                      >
-                        <span className="material-symbols-outlined text-lg">edit</span>
-                      </Link>
+                      <div className="flex items-center gap-1">
+                        <Link
+                          href={`/leads/${cliente.id}/historico`}
+                          className={`p-2 rounded-lg hover:bg-surface-container-low transition-colors ${cliente.cnpjCpf ? "text-on-surface-variant hover:text-primary" : "text-on-surface-variant/40"}`}
+                          title={cliente.cnpjCpf ? "Ver histórico de compras (Bling)" : "Cadastre CPF/CNPJ pra ver histórico"}
+                        >
+                          <span className="material-symbols-outlined text-lg">receipt_long</span>
+                        </Link>
+                        <Link
+                          href={`/leads/${cliente.id}/editar`}
+                          className="p-2 rounded-lg hover:bg-surface-container-low transition-colors text-on-surface-variant hover:text-primary"
+                          title="Editar"
+                        >
+                          <span className="material-symbols-outlined text-lg">edit</span>
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 );
