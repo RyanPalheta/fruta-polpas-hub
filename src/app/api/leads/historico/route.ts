@@ -125,7 +125,8 @@ export async function GET(request: Request) {
           ticket_medio: 0,
           ultima_compra: null,
           frequencia: null,
-          tendencia: null,
+          tendencia_gasto: null,
+          tendencia_produtos: { crescendo: [], caindo: [], novos: [], abandonados: [] },
           top_produtos: [],
           ultimo_sync: null,
         },
@@ -236,6 +237,78 @@ export async function GET(request: Request) {
         valor_total: parseFloat(p.valor_total.toFixed(2)),
       }));
 
+    // ===== Tendencia de produtos: comparar ultimos 90 dias vs 90 anteriores =====
+    function agregaItens(periodoPedidos: typeof pedidosValidos) {
+      const mapa = new Map<string, { qtd: number; valor: number; pedidos: number }>();
+      for (const p of periodoPedidos) {
+        const itens = (Array.isArray(p.itens) ? p.itens : []) as ItemPedido[];
+        for (const it of itens) {
+          const key = (it.descricao ?? "(sem descricao)").trim();
+          const cur = mapa.get(key) ?? { qtd: 0, valor: 0, pedidos: 0 };
+          cur.qtd += Number(it.quantidade ?? 0);
+          cur.valor += Number(it.valor_total_item ?? 0);
+          cur.pedidos += 1;
+          mapa.set(key, cur);
+        }
+      }
+      return mapa;
+    }
+
+    const produtosRecente = agregaItens(ultimo90);
+    const produtosAnterior = agregaItens(anterior90);
+
+    type TendItem = { descricao: string; qtd: number; qtd_anterior: number; variacao_percentual: number | null };
+
+    const crescendo: TendItem[] = [];
+    const caindo: TendItem[] = [];
+    const novos: TendItem[] = [];
+    const abandonados: TendItem[] = [];
+
+    // Crescendo / caindo / novos
+    for (const [desc, recente] of produtosRecente) {
+      const anterior = produtosAnterior.get(desc);
+      if (!anterior || anterior.qtd === 0) {
+        if (recente.qtd > 0) {
+          novos.push({ descricao: desc, qtd: recente.qtd, qtd_anterior: 0, variacao_percentual: null });
+        }
+        continue;
+      }
+      const variacao = ((recente.qtd - anterior.qtd) / anterior.qtd) * 100;
+      const item: TendItem = {
+        descricao: desc,
+        qtd: parseFloat(recente.qtd.toFixed(2)),
+        qtd_anterior: parseFloat(anterior.qtd.toFixed(2)),
+        variacao_percentual: parseFloat(variacao.toFixed(1)),
+      };
+      if (variacao > 30) crescendo.push(item);
+      else if (variacao < -30) caindo.push(item);
+    }
+
+    // Abandonados (existiu antes, sumiu agora)
+    for (const [desc, anterior] of produtosAnterior) {
+      if (!produtosRecente.has(desc) && anterior.qtd > 0) {
+        abandonados.push({
+          descricao: desc,
+          qtd: 0,
+          qtd_anterior: parseFloat(anterior.qtd.toFixed(2)),
+          variacao_percentual: -100,
+        });
+      }
+    }
+
+    // Sort por relevancia
+    crescendo.sort((a, b) => (b.variacao_percentual ?? 0) - (a.variacao_percentual ?? 0));
+    caindo.sort((a, b) => (a.variacao_percentual ?? 0) - (b.variacao_percentual ?? 0));
+    novos.sort((a, b) => b.qtd - a.qtd);
+    abandonados.sort((a, b) => b.qtd_anterior - a.qtd_anterior);
+
+    const tendenciaProdutos = {
+      crescendo: crescendo.slice(0, 3),
+      caindo: caindo.slice(0, 3),
+      novos: novos.slice(0, 3),
+      abandonados: abandonados.slice(0, 3),
+    };
+
     const ultimoSync = pedidos
       .map((p) => p.syncedAt)
       .sort((a, b) => b.getTime() - a.getTime())[0];
@@ -266,19 +339,56 @@ export async function GET(request: Request) {
       partes.push(`Produtos favoritos: ${topTxt}.`);
     }
 
+    // === Tendencia de compra (produtos): comparar ultimos 90 vs anteriores ===
+    const temBaseDeComparacao = anterior90.length > 0;
+
+    if (!temBaseDeComparacao && ultimo90.length > 0) {
+      partes.push(`Cliente novo no Bling — sem base de comparacao de 90 dias ainda.`);
+    } else if (tendenciaProdutos.crescendo.length > 0) {
+      const lista = tendenciaProdutos.crescendo
+        .slice(0, 2)
+        .map((p) => `${p.descricao} (+${p.variacao_percentual}%, ${p.qtd} un vs ${p.qtd_anterior})`)
+        .join("; ");
+      partes.push(`Comprando MAIS: ${lista}.`);
+    }
+
+    if (tendenciaProdutos.novos.length > 0) {
+      const lista = tendenciaProdutos.novos
+        .slice(0, 2)
+        .map((p) => `${p.descricao} (${p.qtd} un)`)
+        .join("; ");
+      partes.push(`Comecou a comprar recentemente: ${lista}.`);
+    }
+
+    if (tendenciaProdutos.caindo.length > 0) {
+      const lista = tendenciaProdutos.caindo
+        .slice(0, 2)
+        .map((p) => `${p.descricao} (${p.variacao_percentual}%, ${p.qtd} un vs ${p.qtd_anterior})`)
+        .join("; ");
+      partes.push(`Comprando MENOS: ${lista}.`);
+    }
+
+    if (tendenciaProdutos.abandonados.length > 0 && tendenciaProdutos.abandonados[0].qtd_anterior >= 3) {
+      const lista = tendenciaProdutos.abandonados
+        .slice(0, 2)
+        .filter((p) => p.qtd_anterior >= 3)
+        .map((p) => `${p.descricao} (era ${p.qtd_anterior} un)`)
+        .join("; ");
+      if (lista) partes.push(`Parou de comprar: ${lista}.`);
+    }
+
+    // Resumo geral de gasto (tendencia financeira) — sinaliza saude da conta
     if (tendencia) {
       if (tendencia.descricao === "crescente") {
         partes.push(
-          `Tendencia crescente — gastou ${tendencia.variacao_percentual}% mais nos ultimos 90 dias vs anteriores.`
+          `No total, gastou ${tendencia.variacao_percentual}% mais nos ultimos 90 dias (R$ ${tendencia.ultimo_periodo.toFixed(2)} vs R$ ${tendencia.periodo_anterior.toFixed(2)}).`
         );
       } else if (tendencia.descricao === "decrescente") {
         partes.push(
-          `ATENCAO: tendencia decrescente — gastou ${Math.abs(tendencia.variacao_percentual ?? 0)}% menos nos ultimos 90 dias.`
+          `ATENCAO: gasto total caiu ${Math.abs(tendencia.variacao_percentual ?? 0)}% nos ultimos 90 dias (R$ ${tendencia.ultimo_periodo.toFixed(2)} vs R$ ${tendencia.periodo_anterior.toFixed(2)}).`
         );
       } else if (tendencia.descricao === "estavel") {
-        partes.push(`Tendencia estavel nos ultimos 6 meses.`);
-      } else if (tendencia.descricao === "inicio") {
-        partes.push(`Cliente novo — primeiras compras nos ultimos 90 dias.`);
+        partes.push(`Gasto total estavel (~R$ ${tendencia.ultimo_periodo.toFixed(2)} nos ultimos 90 dias).`);
       }
     }
 
@@ -321,7 +431,8 @@ export async function GET(request: Request) {
               descricao: `compra aproximadamente a cada ${mediaIntervalo} dias`,
             }
           : null,
-        tendencia,
+        tendencia_gasto: tendencia,
+        tendencia_produtos: tendenciaProdutos,
         top_produtos: topProdutos,
         ultimo_sync: ultimoSync.toISOString(),
       },
