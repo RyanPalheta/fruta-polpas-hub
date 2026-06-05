@@ -5,22 +5,50 @@ import { Prisma } from "@/generated/prisma/client";
 // ----------------------------------------------------------------
 // GET /api/leads/historico
 //
-// Query params (mutuamente exclusivos, prioridade: clienteId > cnpjCpf > telefone):
+// Resolucao do cliente (prioridade): clienteId > cnpjCpf > telefone
 //   ?clienteId=<cuid>
 //   ?cnpjCpf=<11 ou 14 digitos, com ou sem mascara>
 //   ?telefone=<numero, com ou sem DDI/mascara>
 //
-// Retorna o cliente + agregados + lista completa de pedidos do Bling.
-// Use no agente de follow-up p/ saber o que o lead ja comprou.
+// Por DEFAULT retorna:
+//   - cliente (basico)
+//   - resumo (status, total, ticket medio, frequencia, tendencia, top produtos)
+//   - texto_para_agente (frase pronta pra IA usar como contexto)
+//
+// Adicione ?detalhado=true pra incluir tambem a lista completa de pedidos
+// com itens. Use so quando precisar do raw.
 // ----------------------------------------------------------------
+
+interface ItemPedido {
+  descricao?: string | null;
+  codigo?: string | null;
+  quantidade?: number | null;
+  unidade?: string | null;
+  valor_unitario?: number | null;
+  valor_total_item?: number | null;
+}
+
+const SITUACOES_VALIDAS = new Set(["Atendido", "Confirmado", "Entregue", "Em andamento", "Em aberto", "Em digitacao", "Verificado"]);
+// Cancelados ficam de fora dos agregados (mas continuam visiveis em ?detalhado=true)
+
+function diasAtras(date: Date): number {
+  const ms = Date.now() - date.getTime();
+  return Math.floor(ms / (1000 * 60 * 60 * 24));
+}
+
+function formatBR(value: number): string {
+  return `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const clienteId = searchParams.get("clienteId");
     const cnpjCpfRaw = searchParams.get("cnpjCpf");
     const telefoneRaw = searchParams.get("telefone");
+    const detalhado = searchParams.get("detalhado") === "true";
     const limitRaw = searchParams.get("limit");
-    const limit = Math.min(100, Math.max(1, parseInt(limitRaw || "50")));
+    const limit = Math.min(200, Math.max(1, parseInt(limitRaw || "100")));
 
     if (!clienteId && !cnpjCpfRaw && !telefoneRaw) {
       return Response.json(
@@ -44,7 +72,6 @@ export async function GET(request: Request) {
       if (digits.length < 8) {
         return Response.json({ error: "telefone com poucos digitos" }, { status: 400 });
       }
-      // Match por sufixo: aceita variantes (com/sem 55, com/sem mascara no banco)
       const suffix = digits.replace(/^55/, "");
       const matches = await prisma.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM clientes
@@ -58,27 +85,213 @@ export async function GET(request: Request) {
 
     if (!cliente) {
       return Response.json(
-        { encontrado: false, mensagem: "Cliente nao encontrado no dashboard." },
+        {
+          encontrado: false,
+          mensagem: "Cliente nao encontrado no dashboard.",
+          texto_para_agente: "Cliente nao localizado na base. Trate como prospect — sem historico de compras conhecido.",
+        },
         { status: 404 }
       );
     }
 
-    // 2. Buscar historico de compras
+    // 2. Buscar historico de compras (todos)
     const pedidos = await prisma.historicoCompraBling.findMany({
       where: { clienteId: cliente.id },
       orderBy: { data: "desc" },
       take: limit,
     });
 
-    // 3. Agregados
-    const totalPedidos = pedidos.length;
-    const totalGasto = pedidos.reduce((s, p) => s + (p.valorTotal ?? 0), 0);
-    const ultimoPedido = pedidos[0] ?? null;
-    const ultimoSyncEm = pedidos.length > 0
-      ? pedidos.map((p) => p.syncedAt).sort((a, b) => b.getTime() - a.getTime())[0]
-      : null;
+    const pedidosValidos = pedidos.filter((p) => !p.situacao || SITUACOES_VALIDAS.has(p.situacao));
 
-    return Response.json({
+    // ===== Sem pedidos
+    if (pedidosValidos.length === 0) {
+      const texto = `Cliente "${cliente.empresa}" (${cliente.segmento.toLowerCase()}), ainda sem historico de compras registrado no Bling. Trate como lead novo — pode abordar oferecendo os carros-chefe (polpas mais vendidas).`;
+      return Response.json({
+        encontrado: true,
+        cliente: {
+          id: cliente.id,
+          empresa: cliente.empresa,
+          contatoWhatsapp: cliente.contatoWhatsapp,
+          cnpjCpf: cliente.cnpjCpf,
+          segmento: cliente.segmento,
+          cidade: cliente.cidade,
+          uf: cliente.uf,
+          ativo: cliente.ativo,
+        },
+        resumo: {
+          status: "novo",
+          total_pedidos: 0,
+          total_gasto: 0,
+          ticket_medio: 0,
+          ultima_compra: null,
+          frequencia: null,
+          tendencia: null,
+          top_produtos: [],
+          ultimo_sync: null,
+        },
+        texto_para_agente: texto,
+        ...(detalhado ? { pedidos: [] } : {}),
+      });
+    }
+
+    // ===== Calculos com pedidos validos =====
+    const totalPedidos = pedidosValidos.length;
+    const totalGasto = pedidosValidos.reduce((s, p) => s + (p.valorTotal ?? 0), 0);
+    const ticketMedio = totalGasto / totalPedidos;
+
+    // Ultimo pedido (mais recente)
+    const ultimo = pedidosValidos[0]; // ja vem ordenado desc
+    const diasUltimaCompra = diasAtras(ultimo.data);
+
+    // Status baseado em dias desde ultima compra
+    let status: "ativo" | "atencao" | "inativo";
+    if (diasUltimaCompra <= 30) status = "ativo";
+    else if (diasUltimaCompra <= 60) status = "atencao";
+    else status = "inativo";
+
+    // Frequencia: media de dias entre pedidos
+    let mediaIntervalo: number | null = null;
+    if (pedidosValidos.length >= 2) {
+      const intervalos: number[] = [];
+      for (let i = 1; i < pedidosValidos.length; i++) {
+        const diff = Math.floor(
+          (pedidosValidos[i - 1].data.getTime() - pedidosValidos[i].data.getTime()) /
+            (1000 * 60 * 60 * 24)
+        );
+        if (diff > 0) intervalos.push(diff);
+      }
+      if (intervalos.length > 0) {
+        mediaIntervalo = Math.round(intervalos.reduce((a, b) => a + b, 0) / intervalos.length);
+      }
+    }
+
+    // Tendencia: comparar valor dos ultimos 90 dias vs 90 dias anteriores
+    const agora = Date.now();
+    const limite90 = new Date(agora - 90 * 24 * 60 * 60 * 1000);
+    const limite180 = new Date(agora - 180 * 24 * 60 * 60 * 1000);
+
+    const ultimo90 = pedidosValidos.filter((p) => p.data >= limite90);
+    const anterior90 = pedidosValidos.filter((p) => p.data >= limite180 && p.data < limite90);
+
+    const valorUltimo90 = ultimo90.reduce((s, p) => s + (p.valorTotal ?? 0), 0);
+    const valorAnterior90 = anterior90.reduce((s, p) => s + (p.valorTotal ?? 0), 0);
+
+    let tendencia: {
+      ultimo_periodo: number;
+      periodo_anterior: number;
+      variacao_percentual: number | null;
+      descricao: "crescente" | "estavel" | "decrescente" | "inicio";
+    } | null = null;
+
+    if (valorAnterior90 === 0 && valorUltimo90 === 0) {
+      tendencia = null;
+    } else if (valorAnterior90 === 0) {
+      tendencia = {
+        ultimo_periodo: valorUltimo90,
+        periodo_anterior: 0,
+        variacao_percentual: null,
+        descricao: "inicio",
+      };
+    } else {
+      const variacao = ((valorUltimo90 - valorAnterior90) / valorAnterior90) * 100;
+      let descricao: "crescente" | "estavel" | "decrescente";
+      if (variacao > 20) descricao = "crescente";
+      else if (variacao < -20) descricao = "decrescente";
+      else descricao = "estavel";
+      tendencia = {
+        ultimo_periodo: parseFloat(valorUltimo90.toFixed(2)),
+        periodo_anterior: parseFloat(valorAnterior90.toFixed(2)),
+        variacao_percentual: parseFloat(variacao.toFixed(1)),
+        descricao,
+      };
+    }
+
+    // Top produtos (agrega itens de todos pedidos validos)
+    const produtoStats = new Map<
+      string,
+      { descricao: string; quantidade: number; valor_total: number; ocorrencias: number }
+    >();
+    for (const p of pedidosValidos) {
+      const itens = (Array.isArray(p.itens) ? p.itens : []) as ItemPedido[];
+      for (const it of itens) {
+        const key = (it.descricao ?? "(sem descricao)").trim();
+        const cur = produtoStats.get(key) ?? {
+          descricao: key,
+          quantidade: 0,
+          valor_total: 0,
+          ocorrencias: 0,
+        };
+        cur.quantidade += Number(it.quantidade ?? 0);
+        cur.valor_total += Number(it.valor_total_item ?? 0);
+        cur.ocorrencias += 1;
+        produtoStats.set(key, cur);
+      }
+    }
+    const topProdutos = Array.from(produtoStats.values())
+      .sort((a, b) => b.quantidade - a.quantidade)
+      .slice(0, 5)
+      .map((p) => ({
+        ...p,
+        quantidade: parseFloat(p.quantidade.toFixed(2)),
+        valor_total: parseFloat(p.valor_total.toFixed(2)),
+      }));
+
+    const ultimoSync = pedidos
+      .map((p) => p.syncedAt)
+      .sort((a, b) => b.getTime() - a.getTime())[0];
+
+    // ===== Texto natural pra IA =====
+    const partes: string[] = [];
+    partes.push(
+      `Cliente "${cliente.empresa}" (${cliente.segmento.toLowerCase()}), status ${status}.`
+    );
+
+    partes.push(
+      `${totalPedidos} pedido(s) totalizando ${formatBR(totalGasto)}, ticket medio ${formatBR(ticketMedio)}.`
+    );
+
+    if (mediaIntervalo) {
+      partes.push(`Compra aproximadamente a cada ${mediaIntervalo} dias.`);
+    }
+
+    partes.push(
+      `Ultima compra ha ${diasUltimaCompra} dia(s) (${formatBR(ultimo.valorTotal ?? 0)}).`
+    );
+
+    if (topProdutos.length > 0) {
+      const topTxt = topProdutos
+        .slice(0, 3)
+        .map((p) => `${p.descricao} (${p.quantidade} un)`)
+        .join(", ");
+      partes.push(`Produtos favoritos: ${topTxt}.`);
+    }
+
+    if (tendencia) {
+      if (tendencia.descricao === "crescente") {
+        partes.push(
+          `Tendencia crescente — gastou ${tendencia.variacao_percentual}% mais nos ultimos 90 dias vs anteriores.`
+        );
+      } else if (tendencia.descricao === "decrescente") {
+        partes.push(
+          `ATENCAO: tendencia decrescente — gastou ${Math.abs(tendencia.variacao_percentual ?? 0)}% menos nos ultimos 90 dias.`
+        );
+      } else if (tendencia.descricao === "estavel") {
+        partes.push(`Tendencia estavel nos ultimos 6 meses.`);
+      } else if (tendencia.descricao === "inicio") {
+        partes.push(`Cliente novo — primeiras compras nos ultimos 90 dias.`);
+      }
+    }
+
+    if (status === "inativo") {
+      partes.push(`Lead frio — bom alvo de reativacao com oferta especial.`);
+    } else if (status === "atencao") {
+      partes.push(`Risco de perda — convem follow-up logo.`);
+    }
+
+    const textoParaAgente = partes.join(" ");
+
+    // ===== Response =====
+    const payload: Record<string, unknown> = {
       encontrado: true,
       cliente: {
         id: cliente.id,
@@ -90,16 +303,33 @@ export async function GET(request: Request) {
         uf: cliente.uf,
         ativo: cliente.ativo,
       },
-      total_pedidos: totalPedidos,
-      total_gasto: parseFloat(totalGasto.toFixed(2)),
-      ultimo_pedido: ultimoPedido && {
-        data: ultimoPedido.data.toISOString().slice(0, 10),
-        numero_pedido: ultimoPedido.numeroPedido,
-        valor_total: ultimoPedido.valorTotal,
-        situacao: ultimoPedido.situacao,
+      resumo: {
+        status,
+        total_pedidos: totalPedidos,
+        total_gasto: parseFloat(totalGasto.toFixed(2)),
+        ticket_medio: parseFloat(ticketMedio.toFixed(2)),
+        ultima_compra: {
+          data: ultimo.data.toISOString().slice(0, 10),
+          dias_atras: diasUltimaCompra,
+          valor: parseFloat((ultimo.valorTotal ?? 0).toFixed(2)),
+          numero_pedido: ultimo.numeroPedido,
+          situacao: ultimo.situacao,
+        },
+        frequencia: mediaIntervalo
+          ? {
+              dias_entre_compras: mediaIntervalo,
+              descricao: `compra aproximadamente a cada ${mediaIntervalo} dias`,
+            }
+          : null,
+        tendencia,
+        top_produtos: topProdutos,
+        ultimo_sync: ultimoSync.toISOString(),
       },
-      ultimo_sync: ultimoSyncEm?.toISOString() ?? null,
-      pedidos: pedidos.map((p) => ({
+      texto_para_agente: textoParaAgente,
+    };
+
+    if (detalhado) {
+      payload.pedidos = pedidos.map((p) => ({
         id: p.id,
         bling_pedido_id: p.blingPedidoId,
         numero_pedido: p.numeroPedido,
@@ -107,8 +337,10 @@ export async function GET(request: Request) {
         valor_total: p.valorTotal,
         situacao: p.situacao,
         itens: p.itens,
-      })),
-    });
+      }));
+    }
+
+    return Response.json(payload);
   } catch (error) {
     console.error("GET /api/leads/historico error:", error);
     const msg = error instanceof Error ? error.message : "Erro desconhecido";
@@ -117,27 +349,7 @@ export async function GET(request: Request) {
 }
 
 // ----------------------------------------------------------------
-// POST /api/leads/historico
-//
-// Body:
-//   {
-//     "cnpjCpf" | "clienteId" | "telefone": "...",
-//     "pedidos": [
-//       {
-//         "bling_pedido_id": "12345",        // opcional, mas recomendado p/ deduplicar
-//         "numero_pedido": "0001",           // opcional, numero visivel
-//         "data": "2026-05-25",              // YYYY-MM-DD obrigatorio
-//         "valor_total": 410.70,             // obrigatorio
-//         "situacao": "Atendido",            // opcional
-//         "itens": [                         // opcional
-//           { "descricao": "...", "quantidade": 10, "valor": 41.07 }
-//         ]
-//       }
-//     ]
-//   }
-//
-// Upsert idempotente por (clienteId, bling_pedido_id). Se bling_pedido_id for nulo,
-// SEMPRE cria nova linha — entao mande o ID quando tiver, pra evitar duplicacoes.
+// POST /api/leads/historico (sem alteracoes — sync vindo do n8n)
 // ----------------------------------------------------------------
 interface PedidoInput {
   bling_pedido_id?: string | number | null;
@@ -163,7 +375,6 @@ export async function POST(request: Request) {
       return Response.json({ error: "Campo 'pedidos' deve ser um array" }, { status: 400 });
     }
 
-    // Resolver cliente
     let cliente = null;
     if (body.clienteId) {
       cliente = await prisma.cliente.findUnique({ where: { id: body.clienteId } });
@@ -212,7 +423,6 @@ export async function POST(request: Request) {
 
       try {
         if (blingPedidoId) {
-          // Upsert idempotente por (clienteId, blingPedidoId)
           const existing = await prisma.historicoCompraBling.findUnique({
             where: {
               clienteId_blingPedidoId: {
@@ -251,7 +461,6 @@ export async function POST(request: Request) {
             inserted++;
           }
         } else {
-          // Sem ID estavel: cria novo (pode duplicar — apenas use isso pra historico legado)
           await prisma.historicoCompraBling.create({
             data: {
               clienteId: cliente.id,
