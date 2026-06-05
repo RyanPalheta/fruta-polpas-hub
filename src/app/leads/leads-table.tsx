@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getInitials, SEGMENTO_COLORS, DIA_LABELS, formatPhone } from "@/lib/utils";
+import { getInitials, SEGMENTO_COLORS, DIA_LABELS, formatPhone, formatCnpjCpf } from "@/lib/utils";
 
 const SEGMENTOS = ["RESTAURANTE", "HOTELARIA", "ACADEMIA", "DISTRIBUIDOR", "FRANQUIA", "EVENTOS", "OUTRO"];
 const DIAS = [
@@ -18,6 +18,7 @@ interface Cliente {
   id: string;
   empresa: string;
   contatoWhatsapp: string;
+  cnpjCpf: string | null;
   segmento: string;
   diaDisparo: string;
   cidade: string | null;
@@ -159,6 +160,7 @@ export function LeadsTable({ clientes }: Props) {
                 </th>
                 <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Empresa</th>
                 <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Contato WhatsApp</th>
+                <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">CPF / CNPJ</th>
                 <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Segmento</th>
                 <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Dia do Disparo</th>
                 <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Ultimo Pedido</th>
@@ -168,7 +170,7 @@ export function LeadsTable({ clientes }: Props) {
             <tbody className="divide-y divide-outline-variant/10">
               {clientes.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-on-surface-variant">
+                  <td colSpan={8} className="px-6 py-12 text-center text-on-surface-variant">
                     Nenhum cliente encontrado.
                   </td>
                 </tr>
@@ -217,6 +219,15 @@ export function LeadsTable({ clientes }: Props) {
                     {/* WhatsApp */}
                     <td className="px-4 py-4">
                       <span className="text-sm text-on-surface">{formatPhone(cliente.contatoWhatsapp)}</span>
+                    </td>
+
+                    {/* CPF / CNPJ */}
+                    <td className="px-4 py-4">
+                      {cliente.cnpjCpf ? (
+                        <span className="text-sm font-mono text-on-surface">{formatCnpjCpf(cliente.cnpjCpf)}</span>
+                      ) : (
+                        <span className="text-sm text-on-surface-variant/60">—</span>
+                      )}
                     </td>
 
                     {/* Segmento */}

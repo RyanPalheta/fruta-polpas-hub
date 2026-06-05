@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { DiaSemana, Segmento } from "@/generated/prisma/client";
+import { cleanCnpjCpf, isValidCnpjCpfFormat } from "@/lib/utils";
 
 export async function GET(request: Request) {
   try {
@@ -17,6 +18,7 @@ export async function GET(request: Request) {
         { empresa: { contains: search, mode: "insensitive" } },
         { contatoWhatsapp: { contains: search, mode: "insensitive" } },
         { cidade: { contains: search, mode: "insensitive" } },
+        { cnpjCpf: { contains: cleanCnpjCpf(search), mode: "insensitive" } },
       ];
     }
 
@@ -56,7 +58,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { empresa, contatoWhatsapp, segmento, diaDisparo, cidade, uf, tags } = body;
+    const { empresa, contatoWhatsapp, segmento, diaDisparo, cidade, uf, tags, cnpjCpf } = body;
 
     if (!empresa || !contatoWhatsapp || !diaDisparo) {
       return Response.json(
@@ -73,6 +75,13 @@ export async function POST(request: Request) {
       return Response.json({ error: "segmento invalido" }, { status: 400 });
     }
 
+    if (cnpjCpf && !isValidCnpjCpfFormat(cnpjCpf)) {
+      return Response.json(
+        { error: "cnpjCpf invalido: deve ter 11 (CPF) ou 14 (CNPJ) digitos" },
+        { status: 400 }
+      );
+    }
+
     const cliente = await prisma.cliente.create({
       data: {
         empresa,
@@ -81,6 +90,7 @@ export async function POST(request: Request) {
         diaDisparo,
         cidade: cidade || null,
         uf: uf || null,
+        cnpjCpf: cnpjCpf ? cleanCnpjCpf(cnpjCpf) : null,
         tags: tags || [],
       },
     });

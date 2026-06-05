@@ -40,6 +40,29 @@ export function formatPhone(phone: string): string {
   return phone;
 }
 
+/** Remove tudo que não é dígito. Útil antes de salvar CPF/CNPJ no banco. */
+export function cleanCnpjCpf(value: string | null | undefined): string {
+  return (value ?? "").replace(/\D/g, "");
+}
+
+/** Formata CPF (XXX.XXX.XXX-XX) ou CNPJ (XX.XXX.XXX/XXXX-XX) para exibição. */
+export function formatCnpjCpf(value: string | null | undefined): string {
+  const digits = cleanCnpjCpf(value);
+  if (digits.length === 11) {
+    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+  }
+  if (digits.length === 14) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+  }
+  return value ?? "";
+}
+
+/** Validação leve: aceita 11 dígitos (CPF) ou 14 dígitos (CNPJ) ou vazio. */
+export function isValidCnpjCpfFormat(value: string | null | undefined): boolean {
+  const digits = cleanCnpjCpf(value);
+  return digits.length === 0 || digits.length === 11 || digits.length === 14;
+}
+
 export function getInitials(name: string): string {
   return name
     .split(" ")

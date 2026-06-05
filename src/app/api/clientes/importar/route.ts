@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { DiaSemana, Segmento } from "@/generated/prisma/client";
+import { cleanCnpjCpf, isValidCnpjCpfFormat } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
 const SEGMENTO_MAP: Record<string, Segmento> = {
@@ -48,6 +49,7 @@ export async function POST(request: Request) {
       diaDisparo: DiaSemana;
       cidade: string | null;
       uf: string | null;
+      cnpjCpf: string | null;
     }[] = [];
 
     for (let i = 0; i < rows.length; i++) {
@@ -60,6 +62,15 @@ export async function POST(request: Request) {
       const diaRaw = (row.dia_disparo || "").toString().trim().toLowerCase();
       const cidade = (row.cidade || "").toString().trim() || null;
       const uf = (row.uf || "").toString().trim().toUpperCase() || null;
+
+      // Aceita variantes: cnpj_cpf, cnpj, cpf
+      const cnpjCpfRaw = (
+        row.cnpj_cpf ||
+        row.cnpj ||
+        row.cpf ||
+        ""
+      ).toString().trim();
+      const cnpjCpfDigits = cleanCnpjCpf(cnpjCpfRaw);
 
       if (!empresa) {
         errors.push(`Linha ${lineNum}: empresa vazia`);
@@ -83,6 +94,11 @@ export async function POST(request: Request) {
         continue;
       }
 
+      if (cnpjCpfDigits && !isValidCnpjCpfFormat(cnpjCpfDigits)) {
+        errors.push(`Linha ${lineNum}: cnpj_cpf invalido "${cnpjCpfRaw}" (esperado 11 ou 14 digitos)`);
+        continue;
+      }
+
       clientesData.push({
         empresa,
         contatoWhatsapp,
@@ -90,6 +106,7 @@ export async function POST(request: Request) {
         diaDisparo,
         cidade,
         uf,
+        cnpjCpf: cnpjCpfDigits || null,
       });
     }
 

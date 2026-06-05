@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { DiaSemana, Segmento } from "@/generated/prisma/client";
+import { cleanCnpjCpf, isValidCnpjCpfFormat } from "@/lib/utils";
 
 export async function GET(
   _request: Request,
@@ -45,6 +46,13 @@ export async function PUT(
       return Response.json({ error: "segmento invalido" }, { status: 400 });
     }
 
+    if (body.cnpjCpf !== undefined && body.cnpjCpf !== null && body.cnpjCpf !== "" && !isValidCnpjCpfFormat(body.cnpjCpf)) {
+      return Response.json(
+        { error: "cnpjCpf invalido: deve ter 11 (CPF) ou 14 (CNPJ) digitos" },
+        { status: 400 }
+      );
+    }
+
     const cliente = await prisma.cliente.update({
       where: { id },
       data: {
@@ -54,6 +62,12 @@ export async function PUT(
         diaDisparo: body.diaDisparo ?? existing.diaDisparo,
         cidade: body.cidade !== undefined ? body.cidade : existing.cidade,
         uf: body.uf !== undefined ? body.uf : existing.uf,
+        cnpjCpf:
+          body.cnpjCpf !== undefined
+            ? body.cnpjCpf
+              ? cleanCnpjCpf(body.cnpjCpf)
+              : null
+            : existing.cnpjCpf,
         ativo: body.ativo !== undefined ? body.ativo : existing.ativo,
         tags: body.tags !== undefined ? body.tags : existing.tags,
         kommoLeadId: body.kommoLeadId !== undefined ? body.kommoLeadId : existing.kommoLeadId,

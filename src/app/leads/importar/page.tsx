@@ -103,8 +103,16 @@ export default function ImportarPage() {
                   <td className="px-3 py-2">Nao</td>
                   <td className="px-3 py-2 text-on-surface-variant">SP</td>
                 </tr>
+                <tr>
+                  <td className="px-3 py-2 font-semibold">cnpj_cpf</td>
+                  <td className="px-3 py-2">Nao</td>
+                  <td className="px-3 py-2 text-on-surface-variant">12.345.678/0001-99 (ou cnpj / cpf)</td>
+                </tr>
               </tbody>
             </table>
+            <p className="text-xs text-on-surface-variant mt-3">
+              Colunas <code>cnpj</code> e <code>cpf</code> tambem sao aceitas como alternativa a <code>cnpj_cpf</code>. Pontos e tracos sao ignorados — so os digitos sao salvos.
+            </p>
           </div>
         </div>
 

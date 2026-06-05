@@ -30,6 +30,7 @@ const UFS = [
 interface Form {
   empresa: string;
   contatoWhatsapp: string;
+  cnpjCpf: string;
   segmento: string;
   diaDisparo: string;
   cidade: string;
@@ -41,6 +42,7 @@ interface Form {
 const EMPTY: Form = {
   empresa: "",
   contatoWhatsapp: "",
+  cnpjCpf: "",
   segmento: "RESTAURANTE",
   diaDisparo: "SEGUNDA",
   cidade: "",
@@ -146,6 +148,23 @@ export default function NovoLeadPage() {
             />
             <p className="text-xs text-on-surface-variant mt-1">
               Formato: código do país + DDD + número (ex: 5592999990000)
+            </p>
+          </div>
+
+          {/* CPF / CNPJ */}
+          <div>
+            <label className="block text-sm font-semibold text-on-surface mb-1.5">
+              CPF / CNPJ
+            </label>
+            <input
+              type="text"
+              value={form.cnpjCpf}
+              onChange={(e) => set("cnpjCpf", e.target.value)}
+              className="w-full px-4 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant/20 text-sm text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
+              placeholder="000.000.000-00 ou 00.000.000/0000-00"
+            />
+            <p className="text-xs text-on-surface-variant mt-1">
+              Usado para cruzar com o histórico de compras no Bling. Pode digitar com pontos/traços — só os dígitos são salvos.
             </p>
           </div>
 

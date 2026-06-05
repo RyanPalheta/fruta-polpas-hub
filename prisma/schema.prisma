@@ -43,6 +43,7 @@ model Cliente {
   diaDisparo        DiaSemana @map("dia_disparo")
   cidade            String?
   uf                String?
+  cnpjCpf           String?   @map("cnpj_cpf")
   ativo             Boolean   @default(true)
   tags              String[]  @default([])
   kommoLeadId       Int?      @map("kommo_lead_id")
@@ -54,6 +55,7 @@ model Cliente {
 
   disparos Disparo[]
 
+  @@index([cnpjCpf])
   @@map("clientes")
 }
 

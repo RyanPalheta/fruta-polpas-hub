@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { StatCard } from "@/components/stat-card";
 import Link from "next/link";
 import { LeadsTable } from "./leads-table";
+import { cleanCnpjCpf } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -28,10 +29,12 @@ export default async function Page({
   const where: Record<string, unknown> = {};
 
   if (search) {
+    const cleanedCnpj = cleanCnpjCpf(search);
     where.OR = [
       { empresa: { contains: search, mode: "insensitive" } },
       { contatoWhatsapp: { contains: search, mode: "insensitive" } },
       { cidade: { contains: search, mode: "insensitive" } },
+      ...(cleanedCnpj.length >= 3 ? [{ cnpjCpf: { contains: cleanedCnpj } }] : []),
     ];
   }
 
@@ -152,7 +155,7 @@ export default async function Page({
                 type="text"
                 name="search"
                 defaultValue={search}
-                placeholder="Buscar empresa, telefone, cidade..."
+                placeholder="Buscar empresa, telefone, cidade, CPF/CNPJ..."
                 className="pl-10 pr-4 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant/20 text-sm text-on-surface placeholder:text-on-surface-variant/60 w-72 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
               />
             </div>
