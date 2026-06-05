@@ -54,11 +54,21 @@ interface Relatorio {
   naoResponderam?: LeadNaoRespondeu[];
 }
 
+interface UpdatePayload {
+  status: StatusDisparo;
+  followUp?: boolean;
+  valorPedido?: number;
+  descricaoPedido?: string;
+  respondeuEm?: Date;
+  pedidoEm?: Date;
+  kommoLeadId?: number;
+}
+
 // ----------------------------------------------------------------
 // POST /api/disparos/marco-zero
 //
 // Recebe o relatório pré-calculado pelo n8n e persiste:
-//   1. Atualiza Disparo rows (matching via kommoLeadId) → cards do dashboard
+//   1. Atualiza Disparo rows (matching via Cliente.kommoLeadId) → cards do dashboard
 //   2. Upsert CicloSemanal com agregados → tabela "Histórico Semanal"
 //
 // Não chama a KOMMO API — todo o estado vem do body.
@@ -101,85 +111,93 @@ export async function POST(request: Request) {
 
     const now = new Date();
 
-    // 1. Aplica o estado do relatório nos Disparo rows desta semana.
-    //    Matching por kommoLeadId. Disparos sem match são ignorados (não
-    //    perdemos dados — só não conseguimos sincronizar status pra eles).
+    // 1. Mapa { kommoLeadId → disparo.id } da semana.
+    //    O kommoLeadId pode estar no Disparo OU no Cliente (fallback) —
+    //    o executar-disparos atualmente só salva no Cliente.
+    const disparosSemana = await prisma.disparo.findMany({
+      where: { semanaInicio },
+      include: { cliente: true },
+    });
+
+    const leadIdToDisparo = new Map<number, { id: string; kommoLeadIdAtual: number | null }>();
+    for (const d of disparosSemana) {
+      const kid = d.kommoLeadId ?? d.cliente.kommoLeadId ?? null;
+      if (kid != null) leadIdToDisparo.set(kid, { id: d.id, kommoLeadIdAtual: d.kommoLeadId });
+    }
+
+    // 2. Aplica as listas do relatório como atualizações de status.
     const tasks: Promise<unknown>[] = [];
+    const naoEncontrados: number[] = [];
+    let matched = 0;
+
+    function apply(leadId: number, data: UpdatePayload) {
+      const ref = leadIdToDisparo.get(leadId);
+      if (!ref) {
+        naoEncontrados.push(leadId);
+        return;
+      }
+      // Backfill kommoLeadId no Disparo (se ainda não tiver) p/ acelerar futuros sync
+      const finalData: UpdatePayload = { ...data };
+      if (ref.kommoLeadIdAtual == null) finalData.kommoLeadId = leadId;
+
+      tasks.push(
+        prisma.disparo.update({
+          where: { id: ref.id },
+          data: finalData,
+        })
+      );
+      matched++;
+    }
 
     for (const p of relatorio.pedidosConfirmados ?? []) {
       if (!p?.id) continue;
-      tasks.push(
-        prisma.disparo.updateMany({
-          where: { kommoLeadId: p.id, semanaInicio },
-          data: {
-            status: StatusDisparo.PEDIDO_CONFIRMADO,
-            ...(typeof p.valor === "number" ? { valorPedido: p.valor } : {}),
-            ...(p.descricao !== undefined ? { descricaoPedido: p.descricao } : {}),
-            followUp: !!p.recuperado,
-            pedidoEm: now,
-            respondeuEm: now,
-          },
-        })
-      );
+      apply(p.id, {
+        status: StatusDisparo.PEDIDO_CONFIRMADO,
+        ...(typeof p.valor === "number" ? { valorPedido: p.valor } : {}),
+        ...(p.descricao !== undefined ? { descricaoPedido: p.descricao } : {}),
+        followUp: !!p.recuperado,
+        pedidoEm: now,
+        respondeuEm: now,
+      });
     }
 
     for (const p of relatorio.pedidosNaoRealizados ?? []) {
       if (!p?.id) continue;
-      tasks.push(
-        prisma.disparo.updateMany({
-          where: { kommoLeadId: p.id, semanaInicio },
-          data: {
-            status: StatusDisparo.PEDIDO_NAO_REALIZADO,
-            followUp: !!p.followUp,
-            respondeuEm: now,
-          },
-        })
-      );
+      apply(p.id, {
+        status: StatusDisparo.PEDIDO_NAO_REALIZADO,
+        followUp: !!p.followUp,
+        respondeuEm: now,
+      });
     }
 
     // KOMMO "Em Retirada" = lead ainda em atendimento no Marco Zero.
     // Mantemos o mapeamento original: PEDIDO_NAO_REALIZADO.
     for (const p of relatorio.emRetirada ?? []) {
       if (!p?.id) continue;
-      tasks.push(
-        prisma.disparo.updateMany({
-          where: { kommoLeadId: p.id, semanaInicio },
-          data: {
-            status: StatusDisparo.PEDIDO_NAO_REALIZADO,
-            followUp: !!p.followUp,
-            respondeuEm: now,
-          },
-        })
-      );
+      apply(p.id, {
+        status: StatusDisparo.PEDIDO_NAO_REALIZADO,
+        followUp: !!p.followUp,
+        respondeuEm: now,
+      });
     }
 
     for (const p of relatorio.retiradaComFollowUp ?? []) {
       if (!p?.id) continue;
-      tasks.push(
-        prisma.disparo.updateMany({
-          where: { kommoLeadId: p.id, semanaInicio },
-          data: {
-            status: StatusDisparo.PEDIDO_NAO_REALIZADO,
-            followUp: true,
-            respondeuEm: now,
-          },
-        })
-      );
+      apply(p.id, {
+        status: StatusDisparo.PEDIDO_NAO_REALIZADO,
+        followUp: true,
+        respondeuEm: now,
+      });
     }
 
     for (const p of relatorio.naoResponderam ?? []) {
       if (!p?.id) continue;
-      tasks.push(
-        prisma.disparo.updateMany({
-          where: { kommoLeadId: p.id, semanaInicio },
-          data: { status: StatusDisparo.NAO_RESPONDEU },
-        })
-      );
+      apply(p.id, { status: StatusDisparo.NAO_RESPONDEU });
     }
 
     await Promise.all(tasks);
 
-    // 2. Persiste agregados em CicloSemanal (tabela "Histórico Semanal").
+    // 3. Persiste agregados em CicloSemanal (tabela "Histórico Semanal").
     const ciclo = await prisma.cicloSemanal.upsert({
       where: { semanaInicio },
       create: {
@@ -207,7 +225,17 @@ export async function POST(request: Request) {
       },
     });
 
-    return Response.json({ ok: true, relatorio, ciclo });
+    return Response.json({
+      ok: true,
+      relatorio,
+      ciclo,
+      debug: {
+        disparosNaSemana: disparosSemana.length,
+        comKommoLeadId: leadIdToDisparo.size,
+        atualizados: matched,
+        leadsNaoEncontrados: naoEncontrados,
+      },
+    });
   } catch (error) {
     console.error("POST /api/disparos/marco-zero error:", error);
     const msg = error instanceof Error ? error.message : "Erro desconhecido";
