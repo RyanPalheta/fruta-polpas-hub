@@ -53,7 +53,8 @@ model Cliente {
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
 
-  disparos Disparo[]
+  disparos          Disparo[]
+  historicoCompras  HistoricoCompraBling[]
 
   @@index([cnpjCpf])
   @@map("clientes")
@@ -98,6 +99,26 @@ model CicloSemanal {
   createdAt           DateTime @default(now()) @map("created_at")
 
   @@map("ciclos_semanais")
+}
+
+model HistoricoCompraBling {
+  id            String   @id @default(cuid())
+  clienteId     String   @map("cliente_id")
+  blingPedidoId String?  @map("bling_pedido_id")
+  numeroPedido  String?  @map("numero_pedido")
+  data          DateTime @db.Date
+  valorTotal    Float    @map("valor_total")
+  situacao      String?
+  itens         Json?
+  rawPayload    Json?    @map("raw_payload")
+  syncedAt      DateTime @default(now()) @map("synced_at")
+
+  cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  @@unique([clienteId, blingPedidoId])
+  @@index([clienteId, data])
+  @@index([data])
+  @@map("historico_compras_bling")
 }
 
 model Configuracao {
