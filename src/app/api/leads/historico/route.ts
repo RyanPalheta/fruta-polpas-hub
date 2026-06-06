@@ -28,7 +28,10 @@ interface ItemPedido {
   valor_total_item?: number | null;
 }
 
-const SITUACOES_VALIDAS = new Set(["Atendido", "Confirmado", "Entregue", "Em andamento", "Em aberto", "Em digitacao", "Verificado"]);
+// Blacklist: so excluimos cancelados dos agregados. Qualquer outra situacao
+// (incluindo "Status X" nao mapeado) entra normalmente — preferimos incluir
+// demais que perder pedidos por situacao desconhecida.
+const SITUACOES_EXCLUIDAS = new Set(["Cancelado"]);
 // Cancelados ficam de fora dos agregados (mas continuam visiveis em ?detalhado=true)
 
 function diasAtras(date: Date): number {
@@ -101,7 +104,7 @@ export async function GET(request: Request) {
       take: limit,
     });
 
-    const pedidosValidos = pedidos.filter((p) => !p.situacao || SITUACOES_VALIDAS.has(p.situacao));
+    const pedidosValidos = pedidos.filter((p) => !p.situacao || !SITUACOES_EXCLUIDAS.has(p.situacao));
 
     // ===== Sem pedidos
     if (pedidosValidos.length === 0) {
@@ -341,8 +344,12 @@ export async function GET(request: Request) {
 
     // === Tendencia de compra (produtos): comparar ultimos 90 vs anteriores ===
     const temBaseDeComparacao = anterior90.length > 0;
+    const semCompraRecente = ultimo90.length === 0 && anterior90.length === 0;
 
-    if (!temBaseDeComparacao && ultimo90.length > 0) {
+    if (semCompraRecente) {
+      // Cliente tem historico antigo mas nao comprou nos ultimos 180 dias
+      partes.push(`Sem compras nos ultimos 180 dias — historico apenas antigo.`);
+    } else if (!temBaseDeComparacao && ultimo90.length > 0) {
       partes.push(`Cliente novo no Bling — sem base de comparacao de 90 dias ainda.`);
     } else if (tendenciaProdutos.crescendo.length > 0) {
       const lista = tendenciaProdutos.crescendo
