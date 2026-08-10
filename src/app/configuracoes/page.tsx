@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ZonaPerigo } from "./zona-perigo";
 
 interface Config {
   horarioDisparo: string;
@@ -272,6 +273,9 @@ export default function ConfiguracoesPage() {
           </button>
         </div>
       </form>
+
+      {/* Fora do <form> de proposito: nenhum botao daqui pode virar submit. */}
+      <ZonaPerigo />
     </>
   );
 }

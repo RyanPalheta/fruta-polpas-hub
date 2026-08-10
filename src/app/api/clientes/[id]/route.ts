@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
-import { DiaSemana, Segmento } from "@/generated/prisma/client";
-import { cleanCnpjCpf, isValidCnpjCpfFormat } from "@/lib/utils";
+import { Segmento } from "@/generated/prisma/client";
+import { cleanCnpjCpf, isValidCnpjCpfFormat, parseDiasDisparo } from "@/lib/utils";
 
 export async function GET(
   _request: Request,
@@ -38,8 +38,16 @@ export async function PUT(
       return Response.json({ error: "Cliente nao encontrado" }, { status: 404 });
     }
 
-    if (body.diaDisparo && !Object.values(DiaSemana).includes(body.diaDisparo)) {
-      return Response.json({ error: "diaDisparo invalido" }, { status: 400 });
+    // `diaDisparo` (singular) e o formato antigo, ainda aceito por compatibilidade.
+    const diasInformados = body.diasDisparo ?? body.diaDisparo;
+    const diasDisparo =
+      diasInformados !== undefined ? parseDiasDisparo(diasInformados) : null;
+
+    if (diasDisparo !== null && diasDisparo.length === 0) {
+      return Response.json(
+        { error: "Informe ao menos um dia em diasDisparo" },
+        { status: 400 }
+      );
     }
 
     if (body.segmento && !Object.values(Segmento).includes(body.segmento)) {
@@ -59,7 +67,11 @@ export async function PUT(
         empresa: body.empresa ?? existing.empresa,
         contatoWhatsapp: body.contatoWhatsapp ?? existing.contatoWhatsapp,
         segmento: body.segmento ?? existing.segmento,
-        diaDisparo: body.diaDisparo ?? existing.diaDisparo,
+        diasDisparo: diasDisparo ?? existing.diasDisparo,
+        responsavel:
+          body.responsavel !== undefined
+            ? body.responsavel?.trim() || null
+            : existing.responsavel,
         cidade: body.cidade !== undefined ? body.cidade : existing.cidade,
         uf: body.uf !== undefined ? body.uf : existing.uf,
         cnpjCpf:

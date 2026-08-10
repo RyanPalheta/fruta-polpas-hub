@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
-import { DiaSemana, Segmento } from "@/generated/prisma/client";
-import { cleanCnpjCpf, isValidCnpjCpfFormat } from "@/lib/utils";
+import { Segmento } from "@/generated/prisma/client";
+import { cleanCnpjCpf, isValidCnpjCpfFormat, parseDiasDisparo } from "@/lib/utils";
 
 export async function GET(request: Request) {
   try {
@@ -58,17 +58,23 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { empresa, contatoWhatsapp, segmento, diaDisparo, cidade, uf, tags, cnpjCpf } = body;
+    const { empresa, contatoWhatsapp, segmento, cidade, uf, tags, cnpjCpf, responsavel } = body;
 
-    if (!empresa || !contatoWhatsapp || !diaDisparo) {
+    // `diaDisparo` (singular) e o formato antigo, ainda usado pelo workflow do n8n.
+    const diasDisparo = parseDiasDisparo(body.diasDisparo ?? body.diaDisparo);
+
+    if (!empresa || !contatoWhatsapp) {
       return Response.json(
-        { error: "Campos obrigatorios: empresa, contatoWhatsapp, diaDisparo" },
+        { error: "Campos obrigatorios: empresa, contatoWhatsapp" },
         { status: 400 }
       );
     }
 
-    if (!Object.values(DiaSemana).includes(diaDisparo)) {
-      return Response.json({ error: "diaDisparo invalido" }, { status: 400 });
+    if (diasDisparo.length === 0) {
+      return Response.json(
+        { error: "Informe ao menos um dia em diasDisparo" },
+        { status: 400 }
+      );
     }
 
     if (segmento && !Object.values(Segmento).includes(segmento)) {
@@ -87,7 +93,8 @@ export async function POST(request: Request) {
         empresa,
         contatoWhatsapp,
         segmento: segmento || Segmento.RESTAURANTE,
-        diaDisparo,
+        diasDisparo,
+        responsavel: responsavel?.trim() || null,
         cidade: cidade || null,
         uf: uf || null,
         cnpjCpf: cnpjCpf ? cleanCnpjCpf(cnpjCpf) : null,

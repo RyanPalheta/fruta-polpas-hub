@@ -1,129 +1,182 @@
 import { prisma } from "@/lib/prisma";
-import { DiaSemana, Segmento } from "@/generated/prisma/client";
-import { cleanCnpjCpf, isValidCnpjCpfFormat } from "@/lib/utils";
-import * as XLSX from "xlsx";
+import {
+  ErroPlanilha,
+  lerCarteira,
+  mesclarComExistente,
+  separarNovos,
+  tagDaCarteira,
+  type RegistroCarteira,
+} from "@/lib/importar-carteira";
 
-const SEGMENTO_MAP: Record<string, Segmento> = {
-  restaurante: Segmento.RESTAURANTE,
-  hotelaria: Segmento.HOTELARIA,
-  academia: Segmento.ACADEMIA,
-  distribuidor: Segmento.DISTRIBUIDOR,
-  franquia: Segmento.FRANQUIA,
-  eventos: Segmento.EVENTOS,
-  outro: Segmento.OUTRO,
-};
+/** Quantas linhas de exemplo/erro vao na resposta — o resto vira contagem. */
+const LIMITE_AMOSTRA = 10;
+const LIMITE_LISTAS = 200;
 
-const DIA_MAP: Record<string, DiaSemana> = {
-  segunda: DiaSemana.SEGUNDA,
-  terca: DiaSemana.TERCA,
-  terça: DiaSemana.TERCA,
-  quarta: DiaSemana.QUARTA,
-  quinta: DiaSemana.QUINTA,
-  sexta: DiaSemana.SEXTA,
-};
+/** O que fazer com quem a planilha reencontrou. */
+type ModoDuplicata = "ignorar" | "atualizar";
 
+function contar(valores: readonly string[]): Record<string, number> {
+  const mapa: Record<string, number> = {};
+  for (const valor of valores) mapa[valor] = (mapa[valor] ?? 0) + 1;
+  return mapa;
+}
+
+function paraAmostra(registro: RegistroCarteira, responsavelPadrao: string | null) {
+  return {
+    linha: registro.linha,
+    empresa: registro.empresa,
+    contatoWhatsapp: registro.contatoWhatsapp,
+    diasDisparo: registro.diasDisparo,
+    segmento: registro.segmento,
+    segmentoInferido: registro.segmentoInferido,
+    cidade: registro.cidade,
+    uf: registro.uf,
+    responsavel: registro.responsavel ?? responsavelPadrao,
+  };
+}
+
+/**
+ * Importa uma carteira de disparo.
+ *
+ * multipart/form-data:
+ *   file         planilha .xlsx/.xls/.csv (obrigatorio)
+ *   modo         "preview" (padrao, so analisa) ou "aplicar" (grava)
+ *   responsavel  quem fica com a carteira; vazio usa o "RESPONSAVEL: X" da planilha
+ *   aba          nome da aba; vazio usa a primeira
+ *   tag          tag do lote; mande "" pra nao marcar nenhuma
+ *   duplicatas   "ignorar" (padrao) ou "atualizar" o cadastro que ja existe
+ */
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
-    const file = formData.get("file") as File | null;
+    const file = formData.get("file");
 
-    if (!file) {
+    if (!file || typeof file === "string") {
       return Response.json({ error: "Nenhum arquivo enviado" }, { status: 400 });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const workbook = XLSX.read(buffer, { type: "buffer" });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet);
+    const aplicar = formData.get("modo") === "aplicar";
+    const abaInformada = (formData.get("aba") ?? "").toString().trim();
+    const responsavelInformado = (formData.get("responsavel") ?? "").toString().trim();
+    const duplicatas: ModoDuplicata =
+      formData.get("duplicatas") === "atualizar" ? "atualizar" : "ignorar";
 
-    if (rows.length === 0) {
-      return Response.json({ error: "Planilha vazia" }, { status: 400 });
+    const leitura = lerCarteira(Buffer.from(await file.arrayBuffer()), {
+      aba: abaInformada || undefined,
+    });
+
+    const responsavel = responsavelInformado || leitura.responsavelPlanilha?.trim() || null;
+
+    // Campo ausente = tag padrao; campo presente e vazio = sem tag nenhuma.
+    const tagInformada = formData.get("tag");
+    const tag =
+      tagInformada === null ? tagDaCarteira(responsavel) : tagInformada.toString().trim() || null;
+
+    const existentes = await prisma.cliente.findMany({
+      select: {
+        id: true,
+        empresa: true,
+        contatoWhatsapp: true,
+        cnpjCpf: true,
+        cidade: true,
+        uf: true,
+        responsavel: true,
+        diasDisparo: true,
+        tags: true,
+      },
+    });
+    const { novos, conflitos } = separarNovos(leitura.registros, existentes);
+
+    // Duas linhas diferentes podem cair no mesmo cadastro (uma pelo telefone,
+    // outra pelo nome). Na hora de atualizar, vale a primeira.
+    const porCadastro = new Map<string, (typeof conflitos)[number]>();
+    for (const conflito of conflitos) {
+      if (!porCadastro.has(conflito.existente.id)) porCadastro.set(conflito.existente.id, conflito);
     }
 
-    const errors: string[] = [];
-    const clientesData: {
-      empresa: string;
-      contatoWhatsapp: string;
-      segmento: Segmento;
-      diaDisparo: DiaSemana;
-      cidade: string | null;
-      uf: string | null;
-      cnpjCpf: string | null;
-    }[] = [];
+    const mesclagens = [...porCadastro.values()]
+      .map((conflito) => ({
+        conflito,
+        mudancas: mesclarComExistente(conflito.existente, conflito.registro, {
+          responsavelPadrao: responsavel,
+          tag,
+        }),
+      }))
+      .filter((m) => m.mudancas !== null);
 
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const lineNum = i + 2; // +2 because row 1 is the header
+    const analise = {
+      aba: leitura.aba,
+      linhaCabecalho: leitura.linhaCabecalho,
+      colunas: leitura.colunas,
+      responsavelPlanilha: leitura.responsavelPlanilha,
+      responsavel,
+      tag,
+      duplicatas,
+      totalLinhas: leitura.totalLinhas,
+      novos: novos.length,
+      jaCadastrados: conflitos.length,
+      /** Quantos desses cadastros o modo "atualizar" completaria. */
+      atualizaveis: mesclagens.length,
+      descartados: leitura.descartadas.length,
+      resumo: {
+        porDia: contar(novos.map((r) => r.diasDisparo.join("+"))),
+        porSegmento: contar(novos.map((r) => r.segmento)),
+        porCidade: contar(novos.map((r) => r.cidade ?? "—")),
+        porCriterioDuplicata: contar(conflitos.map((c) => c.criterio)),
+      },
+      amostra: novos.slice(0, LIMITE_AMOSTRA).map((r) => paraAmostra(r, responsavel)),
+      descartadas: leitura.descartadas.slice(0, LIMITE_LISTAS),
+      conflitos: conflitos.slice(0, LIMITE_LISTAS).map((c) => ({
+        linha: c.linha,
+        empresa: c.empresa,
+        contatoWhatsapp: c.contatoWhatsapp,
+        criterio: c.criterio,
+        jaCadastradoComo: c.existente.empresa,
+        responsavelAtual: c.existente.responsavel,
+      })),
+    };
 
-      const empresa = (row.empresa || "").toString().trim();
-      const contatoWhatsapp = (row.contato_whatsapp || "").toString().trim();
-      const segmentoRaw = (row.segmento || "").toString().trim().toLowerCase();
-      const diaRaw = (row.dia_disparo || "").toString().trim().toLowerCase();
-      const cidade = (row.cidade || "").toString().trim() || null;
-      const uf = (row.uf || "").toString().trim().toUpperCase() || null;
-
-      // Aceita variantes: cnpj_cpf, cnpj, cpf
-      const cnpjCpfRaw = (
-        row.cnpj_cpf ||
-        row.cnpj ||
-        row.cpf ||
-        ""
-      ).toString().trim();
-      const cnpjCpfDigits = cleanCnpjCpf(cnpjCpfRaw);
-
-      if (!empresa) {
-        errors.push(`Linha ${lineNum}: empresa vazia`);
-        continue;
-      }
-
-      if (!contatoWhatsapp) {
-        errors.push(`Linha ${lineNum}: contato_whatsapp vazio`);
-        continue;
-      }
-
-      const segmento = SEGMENTO_MAP[segmentoRaw];
-      if (!segmento) {
-        errors.push(`Linha ${lineNum}: segmento invalido "${row.segmento}"`);
-        continue;
-      }
-
-      const diaDisparo = DIA_MAP[diaRaw];
-      if (!diaDisparo) {
-        errors.push(`Linha ${lineNum}: dia_disparo invalido "${row.dia_disparo}"`);
-        continue;
-      }
-
-      if (cnpjCpfDigits && !isValidCnpjCpfFormat(cnpjCpfDigits)) {
-        errors.push(`Linha ${lineNum}: cnpj_cpf invalido "${cnpjCpfRaw}" (esperado 11 ou 14 digitos)`);
-        continue;
-      }
-
-      clientesData.push({
-        empresa,
-        contatoWhatsapp,
-        segmento,
-        diaDisparo,
-        cidade,
-        uf,
-        cnpjCpf: cnpjCpfDigits || null,
-      });
+    if (!aplicar) {
+      return Response.json({ modo: "preview", created: 0, atualizados: 0, ...analise });
     }
 
     let created = 0;
-    if (clientesData.length > 0) {
-      const result = await prisma.cliente.createMany({
-        data: clientesData,
-        skipDuplicates: true,
+    if (novos.length > 0) {
+      const resultado = await prisma.cliente.createMany({
+        data: novos.map((r) => ({
+          empresa: r.empresa,
+          contatoWhatsapp: r.contatoWhatsapp,
+          segmento: r.segmento,
+          diasDisparo: r.diasDisparo,
+          // A coluna da linha, quando existe, ganha do responsavel do lote.
+          responsavel: r.responsavel ?? responsavel,
+          cidade: r.cidade,
+          uf: r.uf,
+          cnpjCpf: r.cnpjCpf,
+          tags: tag ? [tag] : [],
+        })),
       });
-      created = result.count;
+      created = resultado.count;
     }
 
-    return Response.json({
-      created,
-      errors,
-    });
+    let atualizados = 0;
+    if (duplicatas === "atualizar" && mesclagens.length > 0) {
+      await prisma.$transaction(
+        mesclagens.map(({ conflito, mudancas }) =>
+          prisma.cliente.update({
+            where: { id: conflito.existente.id },
+            data: mudancas!,
+          })
+        )
+      );
+      atualizados = mesclagens.length;
+    }
+
+    return Response.json({ modo: "aplicar", created, atualizados, ...analise });
   } catch (error) {
+    if (error instanceof ErroPlanilha) {
+      return Response.json({ error: error.message }, { status: 400 });
+    }
     console.error("POST /api/clientes/importar error:", error);
     return Response.json({ error: "Erro ao importar clientes" }, { status: 500 });
   }

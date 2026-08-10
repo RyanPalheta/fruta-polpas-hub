@@ -110,7 +110,7 @@ async function main() {
         contatoWhatsapp: lead.contatoWhatsapp,
         cnpjCpf: lead.cnpjCpf,
         segmento: lead.segmento,
-        diaDisparo: DiaSemana.SEGUNDA,
+        diasDisparo: [DiaSemana.SEGUNDA],
         cidade: lead.cidade,
         uf: lead.uf,
         ativo: true,
@@ -123,7 +123,7 @@ async function main() {
     console.log(`     telefone: ${created.contatoWhatsapp}`);
     console.log(`     cnpj/cpf: ${created.cnpjCpf}`);
     console.log(`     segmento: ${created.segmento}`);
-    console.log(`     dia disparo: ${created.diaDisparo} (padrao — ajuste via UI se necessario)`);
+    console.log(`     dias disparo: ${created.diasDisparo.join(", ")} (padrao — ajuste via UI se necessario)`);
   }
 
   console.log("\n=== Fim ===\n");

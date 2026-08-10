@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { DiasDisparoPicker } from "@/components/dias-disparo-picker";
+import { parseDiasDisparo } from "@/lib/utils";
 
 const SEGMENTOS = [
   "RESTAURANTE",
@@ -14,14 +16,6 @@ const SEGMENTOS = [
   "OUTRO",
 ] as const;
 
-const DIAS = [
-  { value: "SEGUNDA", label: "Segunda-feira" },
-  { value: "TERCA", label: "Terça-feira" },
-  { value: "QUARTA", label: "Quarta-feira" },
-  { value: "QUINTA", label: "Quinta-feira" },
-  { value: "SEXTA", label: "Sexta-feira" },
-];
-
 const UFS = [
   "AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG",
   "PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO",
@@ -32,7 +26,8 @@ interface ClienteForm {
   contatoWhatsapp: string;
   cnpjCpf: string;
   segmento: string;
-  diaDisparo: string;
+  diasDisparo: string[];
+  responsavel: string;
   cidade: string;
   uf: string;
   ativo: boolean;
@@ -48,7 +43,8 @@ export default function EditarLeadPage() {
     contatoWhatsapp: "",
     cnpjCpf: "",
     segmento: "RESTAURANTE",
-    diaDisparo: "SEGUNDA",
+    diasDisparo: [],
+    responsavel: "",
     cidade: "",
     uf: "",
     ativo: true,
@@ -69,7 +65,8 @@ export default function EditarLeadPage() {
           contatoWhatsapp: data.contatoWhatsapp ?? "",
           cnpjCpf: data.cnpjCpf ?? "",
           segmento: data.segmento ?? "RESTAURANTE",
-          diaDisparo: data.diaDisparo ?? "SEGUNDA",
+          diasDisparo: parseDiasDisparo(data.diasDisparo),
+          responsavel: data.responsavel ?? "",
           cidade: data.cidade ?? "",
           uf: data.uf ?? "",
           ativo: data.ativo ?? true,
@@ -80,12 +77,18 @@ export default function EditarLeadPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  function set(field: keyof ClienteForm, value: string | boolean) {
+  function set(field: keyof ClienteForm, value: string | boolean | string[]) {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    if (form.diasDisparo.length === 0) {
+      setError("Selecione ao menos um dia de disparo.");
+      return;
+    }
+
     setSaving(true);
     setError("");
 
@@ -199,7 +202,7 @@ export default function EditarLeadPage() {
             </p>
           </div>
 
-          {/* Segmento + Dia disparo */}
+          {/* Segmento + Responsavel */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-semibold text-on-surface mb-1.5">
@@ -220,20 +223,34 @@ export default function EditarLeadPage() {
 
             <div>
               <label className="block text-sm font-semibold text-on-surface mb-1.5">
-                Dia do Disparo <span className="text-red-500">*</span>
+                Responsável
               </label>
-              <select
-                value={form.diaDisparo}
-                onChange={(e) => set("diaDisparo", e.target.value)}
-                className="w-full px-4 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant/20 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
-              >
-                {DIAS.map((d) => (
-                  <option key={d.value} value={d.value}>
-                    {d.label}
-                  </option>
-                ))}
-              </select>
+              <input
+                type="text"
+                value={form.responsavel}
+                onChange={(e) => set("responsavel", e.target.value)}
+                className="w-full px-4 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant/20 text-sm text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
+                placeholder="Ex: Ryan"
+              />
+              <p className="text-xs text-on-surface-variant mt-1">
+                Deixe vazio para tirar o responsável
+              </p>
             </div>
+          </div>
+
+          {/* Dias do disparo */}
+          <div>
+            <label className="block text-sm font-semibold text-on-surface mb-1.5">
+              Dias do Disparo <span className="text-red-500">*</span>
+            </label>
+            <DiasDisparoPicker
+              value={form.diasDisparo}
+              onChange={(dias) => set("diasDisparo", dias)}
+              disabled={saving}
+            />
+            <p className="text-xs text-on-surface-variant mt-2">
+              O cliente recebe disparo em todos os dias marcados
+            </p>
           </div>
 
           {/* Cidade + UF */}

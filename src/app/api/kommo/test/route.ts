@@ -1,40 +1,40 @@
-import { dispararLeadViaWebhook, WebhookDisparoPayload } from "@/lib/executar-disparos";
+import { configDoDisparo, rodarSalesbot } from "@/lib/kommo";
 
 /**
- * Endpoint de teste — dispara um lead específico via webhook n8n.
+ * Endpoint de teste — roda o SALESBOT num lead especifico da KOMMO.
  *
- * GET /api/kommo/test
- *   → usa o lead de teste padrão (Ryan ATLAS, lead_id=77258490)
+ * GET /api/kommo/test?lead_id=77258490
  *
- * GET /api/kommo/test?lead_id=XXXXX&empresa=Nome&telefone=55...
- *   → usa os parâmetros informados
+ * ATENCAO: isto manda mensagem de verdade pro contato do lead. Por isso o
+ * lead_id e obrigatorio — nao tem alvo padrao, pra ninguem disparar sem querer.
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
+  const leadId = Number(searchParams.get("lead_id"));
 
-  const payload: WebhookDisparoPayload = {
-    lead_id: parseInt(searchParams.get("lead_id") || "77258490"),
-    empresa: searchParams.get("empresa") || "Ryan ATLAS - TESTE",
-    telefone: searchParams.get("telefone") || "559285460332",
-    cliente_id: searchParams.get("cliente_id") || "teste",
-  };
-
-  console.log("[kommo/test] Enviando payload de teste:", payload);
+  if (!Number.isFinite(leadId) || leadId <= 0) {
+    return Response.json(
+      {
+        error:
+          "Informe lead_id: /api/kommo/test?lead_id=77258490. " +
+          "O salesbot manda mensagem de verdade, entao nao existe alvo padrao.",
+      },
+      { status: 400 }
+    );
+  }
 
   try {
-    const resposta = await dispararLeadViaWebhook(payload);
-    return Response.json({
-      ok: true,
-      payload_enviado: payload,
-      resposta_n8n: resposta,
-    });
+    const { botId } = await configDoDisparo();
+    const botInformado = Number(searchParams.get("bot_id"));
+    const bot = Number.isFinite(botInformado) && botInformado > 0 ? botInformado : botId;
+
+    console.log(`[kommo/test] Rodando salesbot ${bot} no lead ${leadId}`);
+    const resposta = await rodarSalesbot(leadId, bot);
+
+    return Response.json({ ok: true, bot, lead_id: leadId, resposta });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[kommo/test] Erro:", msg);
-    return Response.json({
-      ok: false,
-      payload_enviado: payload,
-      erro: msg,
-    }, { status: 500 });
+    return Response.json({ ok: false, lead_id: leadId, erro: msg }, { status: 500 });
   }
 }
