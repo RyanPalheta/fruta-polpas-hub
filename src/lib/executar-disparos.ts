@@ -437,10 +437,23 @@ export async function executarDisparos(filtro: FiltroDisparo = {}): Promise<Disp
 
   // Mapa de telefone -> contato/lead da conta inteira, tirado uma vez so. E a
   // primeira camada da defesa contra criar cadastro repetido na KOMMO.
+  //
+  // So vale a pena montar se alguem do lote ainda nao tem lead conhecido: sao
+  // ~32 paginas de contatos, uns 36s so de limitador. Quem ja tem kommoLeadId
+  // nem chega a consultar o mapa, entao num lote inteiro em cache isso seria
+  // meio minuto jogado fora por invocacao. O mapa vazio e seguro: quem nao esta
+  // nele cai na busca ao vivo, que e justamente o passo que impede duplicata.
+  const precisaDoMapa = liberados.some((c) => c.kommoLeadId == null);
+
   let mapa: Awaited<ReturnType<typeof carregarMapaKommo>>;
   let alvo: Awaited<ReturnType<typeof configDoDisparo>>;
   try {
-    [mapa, alvo] = await Promise.all([carregarMapaKommo(), configDoDisparo()]);
+    [mapa, alvo] = await Promise.all([
+      precisaDoMapa
+        ? carregarMapaKommo()
+        : Promise.resolve({ porTelefone: new Map(), contatos: 0, consultadoEm: new Date() }),
+      configDoDisparo(),
+    ]);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[disparo] Falha ao preparar a KOMMO:", msg);

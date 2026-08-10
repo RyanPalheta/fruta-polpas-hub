@@ -524,11 +524,15 @@ export interface MapaKommo {
 let cacheMapa: { valor: MapaKommo; expiraEm: number } | null = null;
 
 /**
- * Cinco minutos: um disparo grande vai em varios lotes, e reler os milhares de
- * contatos a cada lote custaria mais que o disparo em si. Ficar velho nao cria
- * duplicata — quem nao esta no mapa ainda passa pela busca ao vivo.
+ * Quinze minutos: sao ~32 paginas de contato, uns 36s so de limitador, e um
+ * disparo grande vai em varios lotes e varias invocacoes. Com cinco minutos o
+ * mapa vencia no meio de uma corrida de segunda-feira e era remontado do zero;
+ * quinze cobre a corrida inteira numa instancia quente.
+ *
+ * Ficar velho nao cria duplicata — quem nao esta no mapa ainda passa pela busca
+ * ao vivo antes de qualquer cadastro ser criado.
  */
-const TTL_MAPA_MS = 5 * 60_000;
+const TTL_MAPA_MS = 15 * 60_000;
 
 /**
  * Varre TODOS os contatos da conta e monta o mapa telefone -> contato/lead.
