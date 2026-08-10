@@ -36,27 +36,29 @@ enum StatusDisparo {
 }
 
 model Cliente {
-  id                String    @id @default(cuid())
+  id                String      @id @default(cuid())
   empresa           String
-  contatoWhatsapp   String    @map("contato_whatsapp")
-  segmento          Segmento  @default(RESTAURANTE)
-  diaDisparo        DiaSemana @map("dia_disparo")
+  contatoWhatsapp   String      @map("contato_whatsapp")
+  segmento          Segmento    @default(RESTAURANTE)
+  diasDisparo       DiaSemana[] @default([]) @map("dias_disparo")
+  responsavel       String?
   cidade            String?
   uf                String?
-  cnpjCpf           String?   @map("cnpj_cpf")
-  ativo             Boolean   @default(true)
-  tags              String[]  @default([])
-  kommoLeadId       Int?      @map("kommo_lead_id")
-  kommoContactId    Int?      @map("kommo_contact_id")
-  ultimoPedidoEm    DateTime? @map("ultimo_pedido_em")
-  ultimoPedidoValor Float?    @map("ultimo_pedido_valor")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
+  cnpjCpf           String?     @map("cnpj_cpf")
+  ativo             Boolean     @default(true)
+  tags              String[]    @default([])
+  kommoLeadId       Int?        @map("kommo_lead_id")
+  kommoContactId    Int?        @map("kommo_contact_id")
+  ultimoPedidoEm    DateTime?   @map("ultimo_pedido_em")
+  ultimoPedidoValor Float?      @map("ultimo_pedido_valor")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
 
   disparos          Disparo[]
   historicoCompras  HistoricoCompraBling[]
 
   @@index([cnpjCpf])
+  @@index([responsavel])
   @@map("clientes")
 }
 

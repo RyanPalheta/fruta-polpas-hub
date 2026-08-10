@@ -1,0 +1,228 @@
+{
+  "name": "Bling - Contatos com CNPJ -> Dashboard",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-contatos",
+      "name": "Executar (manual)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.bling.com.br/Api/v3/contatos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limite",
+              "value": "100"
+            },
+            {
+              "name": "pagina",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "pagina",
+                    "value": "={{ $pageCount + 1 }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.data || $response.body.data.length === 0 }}",
+              "limitPagesFetched": true,
+              "maxRequests": 50,
+              "requestInterval": 400
+            }
+          }
+        }
+      },
+      "id": "bling-lista-contatos",
+      "name": "Bling - Lista Contatos (paginado)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -360,
+        300
+      ],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "kPIceQ7MexBmqwHm",
+          "name": "Fruta_OAuth2 API [04.26]"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "split-contatos",
+      "name": "Split Out (data[])",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------\n// Filtra os contatos do Bling que interessam pro dashboard.\n// Roda em cima da lista paginada (todas as paginas ja vieram).\n// ---------------------------------------------------------------\n\n// Vira true se voce tambem quiser puxar pessoa fisica (CPF, 11 digitos).\nconst INCLUIR_CPF = false;\n\n// Situacoes do Bling: 'A' = Ativo, 'I' = Inativo, 'S' = Sem movimento.\nconst SITUACOES_ACEITAS = ['A'];\n\nconst entrada = $input.all();\nconst saida = [];\nlet semDoc = 0, pessoaFisica = 0, inativos = 0;\n\nfor (const item of entrada) {\n  const c = item.json ?? {};\n  const doc = String(c.numeroDocumento ?? '').replace(/\\D/g, '');\n\n  if (!doc) { semDoc++; continue; }\n\n  const ehCnpj = doc.length === 14;\n  const ehCpf  = doc.length === 11;\n\n  if (!ehCnpj && !ehCpf) { semDoc++; continue; }\n  if (ehCpf && !INCLUIR_CPF) { pessoaFisica++; continue; }\n\n  const situacao = c.situacao ?? null;\n  if (situacao && !SITUACOES_ACEITAS.includes(situacao)) { inativos++; continue; }\n\n  saida.push({\n    json: {\n      id: c.id,\n      nome: c.nome ?? null,\n      numeroDocumento: doc,\n      tipoDoc: ehCnpj ? 'CNPJ' : 'CPF',\n      situacao,\n      // guardados como fallback caso o detalhe nao traga telefone\n      telefoneLista: c.telefone ?? null,\n      celularLista: c.celular ?? null,\n    },\n  });\n}\n\nconsole.log('[Contatos] recebidos=' + entrada.length +\n            ' | aprovados=' + saida.length +\n            ' | sem doc valido=' + semDoc +\n            ' | pessoa fisica ignorada=' + pessoaFisica +\n            ' | inativos=' + inativos);\n\nreturn saida;"
+      },
+      "id": "code-filtra-cnpj",
+      "name": "Filtra CNPJ + Ativos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.bling.com.br/Api/v3/contatos/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 400
+            }
+          }
+        }
+      },
+      "id": "bling-detalhe-contato",
+      "name": "Bling - Detalhe Contato",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        360,
+        300
+      ],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "kPIceQ7MexBmqwHm",
+          "name": "Fruta_OAuth2 API [04.26]"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "contatos_detalhados",
+        "options": {}
+      },
+      "id": "aggregate-contatos",
+      "name": "Aggregate Contatos",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------\n// Monta o JSON final, ja no formato que o dashboard espera.\n// Cole a saida do campo \"leads\" no chat.\n// ---------------------------------------------------------------\n\nconst detalhados = $json.contatos_detalhados ?? [];\n\n// Telefone no padrao do banco: 55 + DDD + numero (so digitos).\nfunction normalizarTelefone(...candidatos) {\n  for (const raw of candidatos) {\n    if (!raw) continue;\n    let d = String(raw).replace(/\\D/g, '');\n    if (!d) continue;\n    d = d.replace(/^0+/, '');\n    // tira o 55 pra analisar o numero local\n    let local = d;\n    if (local.length > 11 && local.startsWith('55')) local = local.slice(2);\n    if (local.length === 10 || local.length === 11) return '55' + local;\n  }\n  return null;\n}\n\n// Chute de segmento pelo nome. E so um palpite - revise depois no dashboard.\nfunction chutarSegmento(nome) {\n  const n = (nome || '').toLowerCase();\n  if (/hotel|pousada|resort|hostel|motel/.test(n)) return 'HOTELARIA';\n  if (/academia|fitness|gym|crossfit|pilates/.test(n)) return 'ACADEMIA';\n  if (/evento|buffet|bufe|recep[cç]|festa|salao/.test(n)) return 'EVENTOS';\n  if (/distribuidor|atacad|represent|comercial|mercadinho|mercado|supermerc/.test(n)) return 'DISTRIBUIDOR';\n  if (/franquia|franchis/.test(n)) return 'FRANQUIA';\n  if (/restaurante|lanchonete|pizza|churrasc|refei|self.?service|espetinho|burger|hamburg|sushi|padaria|tapiocaria|creperia|acai|sorvet|bar\\b|cafe|bistro|comida|cozinha|grill|espeto/.test(n)) return 'RESTAURANTE';\n  return 'OUTRO';\n}\n\nconst leads = [];\nconst semTelefone = [];\n\nfor (const item of detalhados) {\n  // O HTTP de detalhe responde { data: { ...contato } }\n  const c = item?.data ?? item ?? {};\n  const geral = c?.endereco?.geral ?? {};\n\n  const doc = String(c.numeroDocumento ?? '').replace(/\\D/g, '');\n  const empresa = (c.nome ?? '').trim();\n  if (!empresa || !doc) continue;\n\n  const contatoWhatsapp = normalizarTelefone(c.celular, c.telefone);\n\n  const registro = {\n    empresa,\n    cnpjCpf: doc,\n    contatoWhatsapp,\n    cidade: (geral.municipio ?? '').trim() || null,\n    uf: (geral.uf ?? '').trim().toUpperCase() || null,\n    segmentoSugerido: chutarSegmento(empresa),\n    blingContatoId: c.id != null ? String(c.id) : null,\n    email: (c.email ?? '').trim() || null,\n  };\n\n  if (!contatoWhatsapp) semTelefone.push(registro);\n  else leads.push(registro);\n}\n\n// Ordena por nome pra facilitar a conferencia\nleads.sort((a, b) => a.empresa.localeCompare(b.empresa, 'pt-BR'));\nsemTelefone.sort((a, b) => a.empresa.localeCompare(b.empresa, 'pt-BR'));\n\nconsole.log('[Dashboard] prontos=' + leads.length + ' | sem telefone=' + semTelefone.length);\n\nreturn [{\n  json: {\n    resumo: {\n      total_detalhados: detalhados.length,\n      prontos_para_importar: leads.length,\n      sem_telefone: semTelefone.length,\n      gerado_por: 'n8n - Bling contatos -> Fruta Polpas Hub',\n    },\n    leads,\n    leads_sem_telefone: semTelefone,\n  },\n}];"
+      },
+      "id": "code-monta-json",
+      "name": "Monta JSON pro Dashboard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Executar (manual)": {
+      "main": [
+        [
+          {
+            "node": "Bling - Lista Contatos (paginado)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bling - Lista Contatos (paginado)": {
+      "main": [
+        [
+          {
+            "node": "Split Out (data[])",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out (data[])": {
+      "main": [
+        [
+          {
+            "node": "Filtra CNPJ + Ativos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtra CNPJ + Ativos": {
+      "main": [
+        [
+          {
+            "node": "Bling - Detalhe Contato",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bling - Detalhe Contato": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Contatos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Contatos": {
+      "main": [
+        [
+          {
+            "node": "Monta JSON pro Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "10c51bf3daad1f1de6171ffb5b65827d467d9b43b6a8447d024041809919d473"
+  }
+}

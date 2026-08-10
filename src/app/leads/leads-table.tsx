@@ -3,16 +3,18 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getInitials, SEGMENTO_COLORS, DIA_LABELS, formatPhone, formatCnpjCpf } from "@/lib/utils";
+import {
+  getInitials,
+  SEGMENTO_COLORS,
+  DIAS_SEMANA,
+  DIA_LABELS,
+  DIA_LABELS_CURTO,
+  formatPhone,
+  formatCnpjCpf,
+} from "@/lib/utils";
 
 const SEGMENTOS = ["RESTAURANTE", "HOTELARIA", "ACADEMIA", "DISTRIBUIDOR", "FRANQUIA", "EVENTOS", "OUTRO"];
-const DIAS = [
-  { value: "SEGUNDA", label: "Segunda" },
-  { value: "TERCA", label: "Terça" },
-  { value: "QUARTA", label: "Quarta" },
-  { value: "QUINTA", label: "Quinta" },
-  { value: "SEXTA", label: "Sexta" },
-];
+const DIAS = DIAS_SEMANA.map((value) => ({ value, label: DIA_LABELS[value] }));
 
 interface Cliente {
   id: string;
@@ -20,7 +22,8 @@ interface Cliente {
   contatoWhatsapp: string;
   cnpjCpf: string | null;
   segmento: string;
-  diaDisparo: string;
+  diasDisparo: string[];
+  responsavel: string | null;
   cidade: string | null;
   uf: string | null;
   ativo: boolean;
@@ -32,7 +35,15 @@ interface Props {
   clientes: Cliente[];
 }
 
-type BulkAction = "diaDisparo" | "segmento" | "ativar" | "desativar" | "deletar";
+type BulkAction =
+  | "diasDisparo"
+  | "adicionarDia"
+  | "removerDia"
+  | "responsavel"
+  | "segmento"
+  | "ativar"
+  | "desativar"
+  | "deletar";
 
 export function LeadsTable({ clientes }: Props) {
   const router = useRouter();
@@ -47,6 +58,15 @@ export function LeadsTable({ clientes }: Props) {
   const allIds = clientes.map((c) => c.id);
   const allSelected = selected.size === allIds.length && allIds.length > 0;
   const someSelected = selected.size > 0;
+
+  // "responsavel" fica de fora de proposito: valor vazio significa "tirar o responsavel".
+  const needsValue =
+    bulkAction === "diasDisparo" ||
+    bulkAction === "adicionarDia" ||
+    bulkAction === "removerDia" ||
+    bulkAction === "segmento";
+  const precisaDia =
+    bulkAction === "diasDisparo" || bulkAction === "adicionarDia" || bulkAction === "removerDia";
 
   function toggleAll() {
     if (allSelected) {
@@ -74,7 +94,7 @@ export function LeadsTable({ clientes }: Props) {
 
   async function applyBulk() {
     if (!bulkAction) return;
-    if ((bulkAction === "diaDisparo" || bulkAction === "segmento") && !bulkValue) return;
+    if (needsValue && !bulkValue) return;
 
     if (bulkAction === "deletar") {
       const ok = window.confirm(
@@ -116,7 +136,6 @@ export function LeadsTable({ clientes }: Props) {
     }
   }
 
-  const needsValue = bulkAction === "diaDisparo" || bulkAction === "segmento";
   const canApply = bulkAction && (!needsValue || bulkValue);
 
   return (
@@ -160,9 +179,9 @@ export function LeadsTable({ clientes }: Props) {
                 </th>
                 <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Empresa</th>
                 <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Contato WhatsApp</th>
-                <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">CPF / CNPJ</th>
+                <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Responsavel</th>
                 <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Segmento</th>
-                <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Dia do Disparo</th>
+                <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Dias do Disparo</th>
                 <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Ultimo Pedido</th>
                 <th className="px-4 py-4 text-xs font-bold uppercase tracking-wider text-on-surface-variant">Acoes</th>
               </tr>
@@ -216,17 +235,27 @@ export function LeadsTable({ clientes }: Props) {
                       </div>
                     </td>
 
-                    {/* WhatsApp */}
+                    {/* WhatsApp + documento */}
                     <td className="px-4 py-4">
-                      <span className="text-sm text-on-surface">{formatPhone(cliente.contatoWhatsapp)}</span>
+                      <p className="text-sm text-on-surface">{formatPhone(cliente.contatoWhatsapp)}</p>
+                      {cliente.cnpjCpf && (
+                        <p className="text-xs font-mono text-on-surface-variant">
+                          {formatCnpjCpf(cliente.cnpjCpf)}
+                        </p>
+                      )}
                     </td>
 
-                    {/* CPF / CNPJ */}
+                    {/* Responsavel */}
                     <td className="px-4 py-4">
-                      {cliente.cnpjCpf ? (
-                        <span className="text-sm font-mono text-on-surface">{formatCnpjCpf(cliente.cnpjCpf)}</span>
+                      {cliente.responsavel ? (
+                        <span className="inline-flex items-center gap-1.5 text-sm text-on-surface">
+                          <span className="w-6 h-6 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center text-[10px] font-bold">
+                            {getInitials(cliente.responsavel)}
+                          </span>
+                          {cliente.responsavel}
+                        </span>
                       ) : (
-                        <span className="text-sm text-on-surface-variant/60">—</span>
+                        <span className="text-sm text-on-surface-variant/60">Sem responsavel</span>
                       )}
                     </td>
 
@@ -237,11 +266,25 @@ export function LeadsTable({ clientes }: Props) {
                       </span>
                     </td>
 
-                    {/* Dia disparo */}
+                    {/* Dias do disparo */}
                     <td className="px-4 py-4">
-                      <span className="text-sm text-on-surface">
-                        {DIA_LABELS[cliente.diaDisparo as keyof typeof DIA_LABELS] || cliente.diaDisparo}
-                      </span>
+                      {cliente.diasDisparo.length === 0 ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700">
+                          <span className="material-symbols-outlined text-sm">warning</span>
+                          Sem dia
+                        </span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {DIAS_SEMANA.filter((d) => cliente.diasDisparo.includes(d)).map((dia) => (
+                            <span
+                              key={dia}
+                              className="px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-bold"
+                            >
+                              {DIA_LABELS_CURTO[dia]}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </td>
 
                     {/* Ultimo pedido */}
@@ -310,7 +353,10 @@ export function LeadsTable({ clientes }: Props) {
               className="flex-1 min-w-[160px] px-3 py-2 rounded-xl bg-white/10 border border-white/20 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             >
               <option value="" className="text-neutral-900">Selecionar ação...</option>
-              <option value="diaDisparo" className="text-neutral-900">Mudar dia de disparo</option>
+              <option value="diasDisparo" className="text-neutral-900">Definir dias de disparo</option>
+              <option value="adicionarDia" className="text-neutral-900">Adicionar um dia</option>
+              <option value="removerDia" className="text-neutral-900">Remover um dia</option>
+              <option value="responsavel" className="text-neutral-900">Definir responsável</option>
               <option value="segmento" className="text-neutral-900">Mudar segmento</option>
               <option value="ativar" className="text-neutral-900">Ativar clientes</option>
               <option value="desativar" className="text-neutral-900">Desativar clientes</option>
@@ -318,7 +364,7 @@ export function LeadsTable({ clientes }: Props) {
             </select>
 
             {/* Value select — dia */}
-            {bulkAction === "diaDisparo" && (
+            {precisaDia && (
               <select
                 value={bulkValue}
                 onChange={(e) => setBulkValue(e.target.value)}
@@ -329,6 +375,17 @@ export function LeadsTable({ clientes }: Props) {
                   <option key={d.value} value={d.value} className="text-neutral-900">{d.label}</option>
                 ))}
               </select>
+            )}
+
+            {/* Value input — responsavel */}
+            {bulkAction === "responsavel" && (
+              <input
+                type="text"
+                value={bulkValue}
+                onChange={(e) => setBulkValue(e.target.value)}
+                placeholder="Nome (vazio = sem responsável)"
+                className="flex-1 min-w-[190px] px-3 py-2 rounded-xl bg-white/10 border border-white/20 text-white text-sm placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
             )}
 
             {/* Value select — segmento */}

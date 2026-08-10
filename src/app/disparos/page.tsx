@@ -1,7 +1,14 @@
 import { prisma } from "@/lib/prisma";
-import { getInicioSemana, getDiaSemanaHoje, DIA_LABELS, STATUS_LABELS, STATUS_COLORS } from "@/lib/utils";
+import {
+  getInicioSemana,
+  getDiaSemanaHoje,
+  DIAS_SEMANA,
+  DIA_LABELS,
+  STATUS_LABELS,
+  STATUS_COLORS,
+} from "@/lib/utils";
 import { DisparoActions } from "./disparo-actions";
-import { DiaSemana } from "@/generated/prisma/client";
+import { PainelDisparo } from "./painel-disparo";
 
 export const dynamic = "force-dynamic";
 
@@ -10,37 +17,39 @@ export default async function DisparosPage() {
   const diaHoje = getDiaSemanaHoje();
   const isFriday = new Date().getDay() === 5;
 
-  // Count clients per weekday
-  const clientesPorDia = await prisma.cliente.groupBy({
-    by: ["diaDisparo"],
-    where: { ativo: true },
-    _count: true,
-  });
+  const [clientesAtivos, disparosSemana] = await Promise.all([
+    prisma.cliente.findMany({
+      where: { ativo: true },
+      select: { diasDisparo: true, responsavel: true },
+    }),
+    prisma.disparo.findMany({
+      where: { semanaInicio },
+      include: { cliente: true },
+      orderBy: { updatedAt: "desc" },
+    }),
+  ]);
 
+  // diasDisparo e uma lista, entao o groupBy do Prisma nao resolve — conta aqui.
   const contagemPorDia: Record<string, number> = {};
-  for (const c of clientesPorDia) {
-    contagemPorDia[c.diaDisparo] = c._count;
+  for (const dia of DIAS_SEMANA) contagemPorDia[dia] = 0;
+  for (const cliente of clientesAtivos) {
+    for (const dia of cliente.diasDisparo) {
+      contagemPorDia[dia] = (contagemPorDia[dia] ?? 0) + 1;
+    }
   }
 
-  // This week's dispatches
-  const disparosSemana = await prisma.disparo.findMany({
-    where: { semanaInicio },
-    include: { cliente: true },
-    orderBy: { updatedAt: "desc" },
-  });
+  const responsaveis = [
+    ...new Set(
+      clientesAtivos
+        .map((c) => c.responsavel?.trim())
+        .filter((r): r is string => Boolean(r))
+    ),
+  ].sort((a, b) => a.localeCompare(b, "pt-BR"));
 
-  // Status breakdown
   const statusCount: Record<string, number> = {};
   for (const d of disparosSemana) {
     statusCount[d.status] = (statusCount[d.status] || 0) + 1;
   }
-
-  // Today's dispatches
-  const disparosHoje = diaHoje
-    ? disparosSemana.filter((d) => d.cliente.diaDisparo === diaHoje)
-    : [];
-
-  const dias: DiaSemana[] = ["SEGUNDA", "TERCA", "QUARTA", "QUINTA", "SEXTA"];
 
   return (
     <>
@@ -50,49 +59,20 @@ export default async function DisparosPage() {
             Disparos
           </h2>
           <p className="text-on-surface-variant font-medium text-lg">
-            Agenda semanal e status dos disparos.
+            Escolha o dia, confira quem vai receber e dispare.
           </p>
         </div>
         <DisparoActions isFriday={isFriday} />
       </div>
 
-      {/* Weekly Calendar Grid */}
-      <div className="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/10 p-6 mb-8">
-        <h3 className="mb-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-          Semana Atual - Clientes Agendados
-        </h3>
-        <div className="grid grid-cols-5 gap-3">
-          {dias.map((dia) => {
-            const isToday = dia === diaHoje;
-            return (
-              <div
-                key={dia}
-                className={`rounded-xl border p-4 text-center transition ${
-                  isToday
-                    ? "border-primary bg-primary/5 shadow-sm"
-                    : "border-outline-variant/20 bg-surface-container-low"
-                }`}
-              >
-                <span className="block text-xs font-medium uppercase tracking-wider text-on-surface-variant">
-                  {DIA_LABELS[dia]}
-                </span>
-                <span className="mt-2 block text-3xl font-black text-on-surface">
-                  {contagemPorDia[dia] || 0}
-                </span>
-                <span className="text-xs text-on-surface-variant">clientes</span>
-                {isToday && (
-                  <span className="mt-1 block text-[10px] font-bold text-primary uppercase">
-                    Hoje
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      <PainelDisparo
+        diaHoje={diaHoje}
+        responsaveis={responsaveis}
+        contagemPorDia={contagemPorDia}
+      />
 
-      {/* Status Breakdown */}
-      <div className="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/10 p-6 mb-8">
+      {/* Status da semana */}
+      <div className="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/10 p-6 mt-6">
         <h3 className="mb-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
           Status da Semana
         </h3>
@@ -115,27 +95,32 @@ export default async function DisparosPage() {
         )}
       </div>
 
-      {/* Today's Dispatches */}
-      <div className="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/10 p-6">
+      {/* Historico da semana */}
+      <div className="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/10 p-6 mt-6">
         <h3 className="mb-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-          Disparos de Hoje {diaHoje ? `(${DIA_LABELS[diaHoje]})` : "(Fim de Semana)"}
+          Disparos desta semana
+          {diaHoje ? ` — hoje é ${DIA_LABELS[diaHoje]}` : " — fim de semana"}
         </h3>
-        {disparosHoje.length === 0 ? (
+        {disparosSemana.length === 0 ? (
           <p className="text-sm text-on-surface-variant">
-            {diaHoje
-              ? "Nenhum disparo agendado para hoje."
-              : "Disparos so ocorrem de segunda a sexta."}
+            Nenhum disparo registrado nesta semana.
           </p>
         ) : (
-          <div className="divide-y divide-outline-variant/10">
-            {disparosHoje.map((d) => (
+          <div className="divide-y divide-outline-variant/10 max-h-96 overflow-y-auto">
+            {disparosSemana.map((d) => (
               <div
                 key={d.id}
                 className="flex items-center justify-between py-3 hover:bg-surface-container-low px-3 rounded-lg transition-colors"
               >
                 <div>
                   <p className="text-sm font-semibold text-on-surface">{d.cliente.empresa}</p>
-                  <p className="text-xs text-on-surface-variant">{d.cliente.contatoWhatsapp}</p>
+                  <p className="text-xs text-on-surface-variant">
+                    {d.cliente.contatoWhatsapp}
+                    {d.cliente.responsavel ? ` · ${d.cliente.responsavel}` : ""}
+                    {d.disparadoEm
+                      ? ` · ${new Date(d.disparadoEm).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}`
+                      : ""}
+                  </p>
                 </div>
                 <span
                   className={`text-[10px] font-bold uppercase px-2.5 py-1 rounded-full ${STATUS_COLORS[d.status] || "bg-gray-100 text-gray-700"}`}

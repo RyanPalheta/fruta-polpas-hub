@@ -1,4 +1,4 @@
-import { DiaSemana } from "@/generated/prisma/client";
+﻿import { DiaSemana } from "@/generated/prisma/client";
 
 export function getDiaSemanaHoje(): DiaSemana | null {
   const day = new Date().getDay();
@@ -90,6 +90,69 @@ export const DIA_LABELS: Record<string, string> = {
   QUINTA: "Quinta",
   SEXTA: "Sexta",
 };
+
+export const DIA_LABELS_CURTO: Record<string, string> = {
+  SEGUNDA: "Seg",
+  TERCA: "Ter",
+  QUARTA: "Qua",
+  QUINTA: "Qui",
+  SEXTA: "Sex",
+};
+
+/** Dias uteis na ordem da semana. Use como fonte unica da ordenacao. */
+export const DIAS_SEMANA: DiaSemana[] = ["SEGUNDA", "TERCA", "QUARTA", "QUINTA", "SEXTA"];
+
+/** Ordena uma lista de dias na ordem da semana e remove repetidos. */
+export function ordenarDias(dias: readonly string[]): DiaSemana[] {
+  return DIAS_SEMANA.filter((d) => dias.includes(d));
+}
+
+/** "SEGUNDA","QUARTA" -> "Seg, Qua". Lista vazia vira travessao. */
+export function formatDiasDisparo(dias: readonly string[]): string {
+  const ordenados = ordenarDias(dias);
+  if (ordenados.length === 0) return "—";
+  return ordenados.map((d) => DIA_LABELS_CURTO[d]).join(", ");
+}
+
+const DIA_ALIASES: Record<string, DiaSemana> = {
+  segunda: "SEGUNDA",
+  seg: "SEGUNDA",
+  "segunda-feira": "SEGUNDA",
+  terca: "TERCA",
+  "terça": "TERCA",
+  ter: "TERCA",
+  "terca-feira": "TERCA",
+  "terça-feira": "TERCA",
+  quarta: "QUARTA",
+  qua: "QUARTA",
+  "quarta-feira": "QUARTA",
+  quinta: "QUINTA",
+  qui: "QUINTA",
+  "quinta-feira": "QUINTA",
+  sexta: "SEXTA",
+  sex: "SEXTA",
+  "sexta-feira": "SEXTA",
+};
+
+/**
+ * Interpreta dias vindos de planilha ou API: aceita array, ou string separada
+ * por virgula/ponto-e-virgula/barra ("segunda, quarta" / "seg;qua").
+ * Ignora o que nao reconhece — quem chama decide se lista vazia e erro.
+ */
+export function parseDiasDisparo(valor: unknown): DiaSemana[] {
+  const bruto: string[] = Array.isArray(valor)
+    ? valor.map((v) => String(v))
+    : String(valor ?? "").split(/[,;/|]+/);
+
+  const encontrados: string[] = [];
+  for (const parte of bruto) {
+    const chave = parte.trim().toLowerCase().replace(/\s+/g, "");
+    if (!chave) continue;
+    const dia = DIA_ALIASES[chave];
+    if (dia) encontrados.push(dia);
+  }
+  return ordenarDias(encontrados);
+}
 
 export const STATUS_LABELS: Record<string, string> = {
   AGUARDANDO: "Aguardando",

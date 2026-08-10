@@ -1,8 +1,11 @@
 import { prisma } from "@/lib/prisma";
-import { DiaSemana, Segmento } from "@/generated/prisma/client";
+import { Segmento } from "@/generated/prisma/client";
+import { ordenarDias, parseDiasDisparo } from "@/lib/utils";
 
 // PATCH /api/clientes/bulk
-// Body: { ids: string[], action: "diaDisparo" | "segmento" | "ativar" | "desativar" | "deletar", value?: string }
+// Body: { ids: string[], action: string, value?: string }
+// Acoes: diasDisparo | adicionarDia | removerDia | responsavel | segmento
+//        | ativar | desativar | deletar
 export async function PATCH(request: Request) {
   try {
     const body = await request.json();
@@ -23,13 +26,62 @@ export async function PATCH(request: Request) {
     let count = 0;
 
     switch (action) {
-      case "diaDisparo": {
-        if (!value || !Object.values(DiaSemana).includes(value as DiaSemana)) {
+      // Substitui os dias: aceita "SEGUNDA" ou "SEGUNDA,QUARTA".
+      case "diasDisparo": {
+        const dias = parseDiasDisparo(value);
+        if (dias.length === 0) {
           return Response.json({ error: "Dia inválido" }, { status: 400 });
         }
         const result = await prisma.cliente.updateMany({
           where: { id: { in: ids } },
-          data: { diaDisparo: value as DiaSemana },
+          data: { diasDisparo: dias },
+        });
+        count = result.count;
+        break;
+      }
+
+      // Acrescenta/remove um dia preservando os demais. Como cada cliente tem
+      // uma lista propria, precisa ser um update por cliente.
+      case "adicionarDia":
+      case "removerDia": {
+        const [dia] = parseDiasDisparo(value);
+        if (!dia) {
+          return Response.json({ error: "Dia inválido" }, { status: 400 });
+        }
+
+        const clientes = await prisma.cliente.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, diasDisparo: true },
+        });
+
+        const alteracoes = clientes
+          .map((cliente) => {
+            const atuais = cliente.diasDisparo;
+            const novos =
+              action === "adicionarDia"
+                ? ordenarDias([...atuais, dia])
+                : atuais.filter((d) => d !== dia);
+            return { cliente, novos };
+          })
+          .filter(({ cliente, novos }) => novos.length !== cliente.diasDisparo.length);
+
+        await prisma.$transaction(
+          alteracoes.map(({ cliente, novos }) =>
+            prisma.cliente.update({
+              where: { id: cliente.id },
+              data: { diasDisparo: novos },
+            })
+          )
+        );
+        count = alteracoes.length;
+        break;
+      }
+
+      // Valor vazio limpa o responsavel.
+      case "responsavel": {
+        const result = await prisma.cliente.updateMany({
+          where: { id: { in: ids } },
+          data: { responsavel: value?.trim() || null },
         });
         count = result.count;
         break;

@@ -1,0 +1,380 @@
+{
+  "name": "Bling -> Dashboard: popular clientes",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-popular",
+      "name": "Executar (manual)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://fruta-polpas-hub-ivory.vercel.app/api/clientes",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "100"
+            },
+            {
+              "name": "page",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "page",
+                    "value": "={{ $pageCount + 1 }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.data || $response.body.data.length === 0 }}",
+              "limitPagesFetched": true,
+              "maxRequests": 50,
+              "requestInterval": 200
+            }
+          }
+        }
+      },
+      "id": "dash-lista-clientes",
+      "name": "Dashboard - Clientes existentes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -800,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------\n// Indexa os clientes JA cadastrados no dashboard, para nao duplicar.\n// Recebe um item por pagina (a paginacao do node anterior).\n// ---------------------------------------------------------------\nconst paginas = $input.all();\n\nconst docs = new Set();\nconst telsSufixo = new Set();\nlet total = 0;\n\nfor (const p of paginas) {\n  const body = p.json ?? {};\n  const arr = Array.isArray(body.data) ? body.data : [];\n  for (const c of arr) {\n    total++;\n    const d = String(c.cnpjCpf ?? '').replace(/\\D/g, '');\n    if (d) docs.add(d);\n    const t = String(c.contatoWhatsapp ?? '').replace(/\\D/g, '');\n    // sufixo de 10 digitos (DDD + numero sem o 9) - tolera variacao de +55 e do 9o digito\n    if (t.length >= 10) telsSufixo.add(t.slice(-10));\n  }\n}\n\n// Se o indice vier vazio, o cruzamento nao funciona e o workflow duplicaria\n// todo mundo. Melhor parar aqui mostrando o que a API respondeu de fato.\nif (total === 0) {\n  const amostra = JSON.stringify(paginas[0]?.json ?? null).slice(0, 400);\n  throw new Error('GET /api/clientes nao devolveu nenhum cliente - abortando para nao duplicar. Resposta da 1a pagina: ' + amostra);\n}\n\nconsole.log('[Existentes] ' + total + ' cliente(s) no dashboard | ' +\n            docs.size + ' com CNPJ/CPF | ' + telsSufixo.size + ' telefone(s) indexado(s)');\n\nreturn [{\n  json: {\n    total_existentes: total,\n    docs: Array.from(docs),\n    tels_sufixo: Array.from(telsSufixo),\n  },\n}];"
+      },
+      "id": "code-indexa",
+      "name": "Indexa existentes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.bling.com.br/Api/v3/contatos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limite",
+              "value": "100"
+            },
+            {
+              "name": "pagina",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "pagina",
+                    "value": "={{ $pageCount + 1 }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.data || $response.body.data.length === 0 }}",
+              "limitPagesFetched": true,
+              "maxRequests": 50,
+              "requestInterval": 400
+            }
+          }
+        }
+      },
+      "id": "bling-lista-contatos",
+      "name": "Bling - Lista Contatos (paginado)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -320,
+        300
+      ],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "kPIceQ7MexBmqwHm",
+          "name": "Fruta_OAuth2 API [04.26]"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "split-contatos",
+      "name": "Split Out (data[])",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------\n// Filtra os contatos do Bling que interessam.\n// ---------------------------------------------------------------\n\n// Vira true se voce tambem quiser puxar pessoa fisica (CPF, 11 digitos).\nconst INCLUIR_CPF = false;\n\n// Blacklist, nao whitelist: so descartamos o que sabemos que nao serve.\n// Situacao no Bling: 'A' = Ativo, 'I' = Inativo, 'E' = Excluido.\n// Qualquer outra situacao (inclusive nao mapeada ou vazia) passa.\nconst SITUACOES_RECUSADAS = ['I', 'E'];\n\nconst entrada = $input.all();\nconst saida = [];\nlet semDoc = 0, pessoaFisica = 0, recusados = 0;\n\nfor (const item of entrada) {\n  const c = item.json ?? {};\n  const doc = String(c.numeroDocumento ?? '').replace(/\\D/g, '');\n\n  if (!doc) { semDoc++; continue; }\n\n  const ehCnpj = doc.length === 14;\n  const ehCpf = doc.length === 11;\n\n  if (!ehCnpj && !ehCpf) { semDoc++; continue; }\n  if (ehCpf && !INCLUIR_CPF) { pessoaFisica++; continue; }\n\n  const situacao = c.situacao ?? null;\n  if (situacao && SITUACOES_RECUSADAS.includes(String(situacao).toUpperCase())) { recusados++; continue; }\n\n  saida.push({ json: { id: c.id, nome: c.nome ?? null, numeroDocumento: doc, situacao } });\n}\n\nconsole.log('[Bling] recebidos=' + entrada.length +\n            ' | aprovados=' + saida.length +\n            ' | sem doc valido=' + semDoc +\n            ' | pessoa fisica ignorada=' + pessoaFisica +\n            ' | inativos/excluidos=' + recusados);\n\nreturn saida;"
+      },
+      "id": "code-filtra",
+      "name": "Filtra CNPJ + Ativos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.bling.com.br/Api/v3/contatos/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 400
+            }
+          }
+        }
+      },
+      "id": "bling-detalhe-contato",
+      "name": "Bling - Detalhe Contato",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        300
+      ],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "kPIceQ7MexBmqwHm",
+          "name": "Fruta_OAuth2 API [04.26]"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "contatos_detalhados",
+        "options": {}
+      },
+      "id": "aggregate-contatos",
+      "name": "Aggregate Contatos",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------\n// Cruza os contatos do Bling com quem ja existe e monta APENAS os novos,\n// no formato exato que o POST /api/clientes espera.\n// ---------------------------------------------------------------\n\n// O schema exige diaDisparo e o Bling nao tem esse dado.\nconst DIA_PADRAO = 'SEGUNDA';\n// Tag para identificar depois quem veio dessa importacao.\nconst TAGS = ['bling'];\n\nconst idx = $('Indexa existentes').first().json;\nconst docsExistentes = new Set(idx.docs ?? []);\nconst telsExistentes = new Set(idx.tels_sufixo ?? []);\n\n// $input.first() em vez de $json: funciona nos dois modos do Code node.\nconst detalhados = $input.first().json.contatos_detalhados ?? [];\n\n// Transforma o objeto de erro do n8n em texto legivel.\n// (E daqui que sai o famoso \"[object Object]\" quando se concatena direto.)\nfunction textoDoErro(e) {\n  if (e == null) return 'erro desconhecido';\n  if (typeof e === 'string') return e;\n  const partes = [];\n  if (e.message) partes.push(String(e.message));\n  if (e.description) partes.push(String(e.description));\n  if (e.httpCode) partes.push('HTTP ' + e.httpCode);\n  return partes.length ? partes.join(' | ') : JSON.stringify(e).slice(0, 300);\n}\n\n// Telefone no padrao do banco: 55 + DDD + numero (so digitos).\nfunction normalizarTelefone(...candidatos) {\n  for (const raw of candidatos) {\n    if (!raw) continue;\n    let d = String(raw).replace(/\\D/g, '');\n    if (!d) continue;\n    d = d.replace(/^0+/, '');\n    let local = d;\n    if (local.length > 11 && local.startsWith('55')) local = local.slice(2);\n    if (local.length === 10 || local.length === 11) return '55' + local;\n  }\n  return null;\n}\n\n// Chute de segmento pelo nome. E so um palpite - revise no dashboard depois.\nfunction chutarSegmento(nome) {\n  const n = (nome || '').toLowerCase();\n  if (/hotel|pousada|resort|hostel|motel/.test(n)) return 'HOTELARIA';\n  if (/academia|fitness|gym|crossfit|pilates/.test(n)) return 'ACADEMIA';\n  if (/evento|buffet|bufe|recep[cç]|festa|salao/.test(n)) return 'EVENTOS';\n  if (/distribuidor|atacad|represent|comercial|mercadinho|mercado|supermerc/.test(n)) return 'DISTRIBUIDOR';\n  if (/franquia|franchis/.test(n)) return 'FRANQUIA';\n  if (/restaurante|lanchonete|pizza|churrasc|refei|self.?service|espetinho|burger|hamburg|sushi|padaria|tapiocaria|creperia|acai|sorvet|bar\\b|cafe|bistro|comida|cozinha|grill|espeto/.test(n)) return 'RESTAURANTE';\n  return 'OUTRO';\n}\n\nconst novos = [];\nconst jaExistiam = [];\nconst semTelefone = [];\nconst falhaNoDetalhe = [];\nconst docsNoLote = new Set();\n\nfor (const item of detalhados) {\n  // Se o GET de detalhe falhou, o item vem como { error: ... } em vez de { data: ... }\n  if (item && item.data === undefined && item.error !== undefined) {\n    falhaNoDetalhe.push(textoDoErro(item.error));\n    continue;\n  }\n\n  // O HTTP de detalhe responde { data: { ...contato } }\n  const c = item?.data ?? item ?? {};\n  const geral = c?.endereco?.geral ?? {};\n\n  const doc = String(c.numeroDocumento ?? '').replace(/\\D/g, '');\n  const empresa = (c.nome ?? '').trim();\n  if (!empresa || !doc) continue;\n\n  const tel = normalizarTelefone(c.celular, c.telefone);\n\n  if (!tel) { semTelefone.push(empresa + ' (' + doc + ')'); continue; }\n  if (docsExistentes.has(doc)) { jaExistiam.push(empresa + ' [CNPJ]'); continue; }\n  if (telsExistentes.has(tel.slice(-10))) { jaExistiam.push(empresa + ' [telefone]'); continue; }\n  if (docsNoLote.has(doc)) { jaExistiam.push(empresa + ' [duplicado no proprio Bling]'); continue; }\n  docsNoLote.add(doc);\n\n  novos.push({\n    json: {\n      empresa,\n      blingContatoId: c.id != null ? String(c.id) : null,\n      payload: {\n        empresa,\n        contatoWhatsapp: tel,\n        segmento: chutarSegmento(empresa),\n        diaDisparo: DIA_PADRAO,\n        cidade: (geral.municipio ?? '').trim() || null,\n        uf: (geral.uf ?? '').trim().toUpperCase() || null,\n        cnpjCpf: doc,\n        tags: TAGS,\n      },\n    },\n  });\n}\n\nconsole.log('[Novos] a criar=' + novos.length +\n            ' | ja existiam=' + jaExistiam.length +\n            ' | sem telefone=' + semTelefone.length +\n            ' | falha no detalhe=' + falhaNoDetalhe.length);\nif (jaExistiam.length) console.log('[Ja existiam] ' + jaExistiam.join(' ; '));\nif (semTelefone.length) console.log('[Sem telefone - NAO importados] ' + semTelefone.join(' ; '));\nif (falhaNoDetalhe.length) console.log('[Falha no GET de detalhe] ' + falhaNoDetalhe.join(' ; '));\n\n// Se retornar vazio, os nodes seguintes nao rodam: significa que nao ha nada novo.\nreturn novos;"
+      },
+      "id": "code-monta-novos",
+      "name": "Monta novos clientes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://fruta-polpas-hub-ivory.vercel.app/api/clientes",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 300
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "dash-cria-cliente",
+      "name": "Dashboard - Cria cliente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------\n// Resumo final do que foi gravado no dashboard.\n//\n// O node de POST esta com \"Full Response\" + \"Never Error\", entao cada item\n// chega como { statusCode, headers, body } inclusive quando a API devolve\n// 4xx/5xx. Assim conseguimos ler a mensagem real ({\"error\":\"...\"}) em vez do\n// \"[object Object]\" que aparece quando se concatena o objeto de erro do n8n.\n// ---------------------------------------------------------------\nconst respostas = $input.all();\nconst enviados = $('Monta novos clientes').all();\n\nfunction textoDoErro(json) {\n  // Erro de transporte do proprio n8n (timeout, DNS, credencial...)\n  if (json?.error !== undefined) {\n    const e = json.error;\n    if (typeof e === 'string') return e;\n    const partes = [];\n    if (e?.message) partes.push(String(e.message));\n    if (e?.description) partes.push(String(e.description));\n    if (e?.httpCode) partes.push('HTTP ' + e.httpCode);\n    return partes.length ? partes.join(' | ') : JSON.stringify(e).slice(0, 300);\n  }\n  // Erro devolvido pela API do dashboard\n  const corpo = json?.body;\n  if (corpo && typeof corpo === 'object') {\n    if (corpo.error) return String(corpo.error);\n    return JSON.stringify(corpo).slice(0, 300);\n  }\n  if (typeof corpo === 'string') return corpo.slice(0, 300);\n  return JSON.stringify(json ?? null).slice(0, 300);\n}\n\nconst criados = [];\nconst falhas = [];\n\nfor (let i = 0; i < respostas.length; i++) {\n  const json = respostas[i].json ?? {};\n  const nome = enviados[i]?.json?.empresa ?? '(desconhecido)';\n  const status = json.statusCode ?? null;\n  const corpo = json.body ?? json;\n\n  const ok = json.error === undefined &&\n             (status != null ? status >= 200 && status < 300 : corpo?.id != null);\n\n  if (!ok) {\n    falhas.push({ empresa: nome, status, erro: textoDoErro(json) });\n  } else {\n    criados.push({ id: corpo.id, empresa: corpo.empresa ?? nome, cnpjCpf: corpo.cnpjCpf ?? null });\n  }\n}\n\nconsole.log('[Resultado] criados=' + criados.length + ' | falhas=' + falhas.length);\nfor (const f of falhas) {\n  console.log('[Falha] ' + f.empresa + ' -> HTTP ' + f.status + ' - ' + f.erro);\n}\n\nreturn [{ json: { total_criados: criados.length, total_falhas: falhas.length, criados, falhas } }];"
+      },
+      "id": "code-resumo",
+      "name": "Resumo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Executar (manual)": {
+      "main": [
+        [
+          {
+            "node": "Dashboard - Clientes existentes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dashboard - Clientes existentes": {
+      "main": [
+        [
+          {
+            "node": "Indexa existentes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Indexa existentes": {
+      "main": [
+        [
+          {
+            "node": "Bling - Lista Contatos (paginado)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bling - Lista Contatos (paginado)": {
+      "main": [
+        [
+          {
+            "node": "Split Out (data[])",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out (data[])": {
+      "main": [
+        [
+          {
+            "node": "Filtra CNPJ + Ativos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtra CNPJ + Ativos": {
+      "main": [
+        [
+          {
+            "node": "Bling - Detalhe Contato",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bling - Detalhe Contato": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Contatos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Contatos": {
+      "main": [
+        [
+          {
+            "node": "Monta novos clientes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Monta novos clientes": {
+      "main": [
+        [
+          {
+            "node": "Dashboard - Cria cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dashboard - Cria cliente": {
+      "main": [
+        [
+          {
+            "node": "Resumo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "10c51bf3daad1f1de6171ffb5b65827d467d9b43b6a8447d024041809919d473"
+  }
+}
